@@ -1,5 +1,19 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import "./styles.css";
+import {
+  CheckTemplate,
+  ReviewRecord,
+  ReviewState,
+  initializeDatabase,
+  addTemplate,
+  updateTemplate,
+  deleteTemplate as dbDeleteTemplate,
+  addRecord,
+  saveReviewNote,
+  getAllTemplates,
+  getAllRecords,
+  getAllReviewNotes
+} from "./db";
 
 type UserRole = "维修工程师" | "放行人员" | "培训教员";
 
@@ -68,18 +82,6 @@ const project = {
   ]
 };
 
-interface CheckTemplate {
-  id: string;
-  name: string;
-  aircraftType: string;
-  ataChapter: string;
-  checkArea: string;
-  checkItem: string;
-  defectDesc: string;
-  handling: string;
-  signer: string;
-}
-
 type TemplateFormValues = Omit<CheckTemplate, "id">;
 
 interface FormValues {
@@ -90,57 +92,8 @@ interface FormValues {
   defectDesc: string;
   handling: string;
   signer: string;
-}
-
-interface ReviewRecord {
-  id: string;
-  aircraftType: string;
-  ataChapter: string;
-  checkArea: string;
   status: string;
-  defectDesc: string;
-  handling: string;
 }
-
-interface ReviewState {
-  [recordId: string]: string;
-}
-
-const initialTemplates: CheckTemplate[] = [
-  {
-    id: "1",
-    name: "A320 起落架常规检查",
-    aircraftType: "A320",
-    ataChapter: "ATA 32",
-    checkArea: "起落架",
-    checkItem: "主轮磨损检查、减震支柱油位检查、刹车装置检查",
-    defectDesc: "",
-    handling: "",
-    signer: ""
-  },
-  {
-    id: "2",
-    name: "B737 电源系统检查",
-    aircraftType: "B737",
-    ataChapter: "ATA 24",
-    checkArea: "电源系统",
-    checkItem: "电瓶电压测试、APU发电机测试、外部电源检查",
-    defectDesc: "",
-    handling: "",
-    signer: ""
-  },
-  {
-    id: "3",
-    name: "ARJ21 飞控系统检查",
-    aircraftType: "ARJ21",
-    ataChapter: "ATA 27",
-    checkArea: "飞控",
-    checkItem: "副翼作动测试、升降舵响应检查、方向舵行程检查",
-    defectDesc: "",
-    handling: "",
-    signer: ""
-  }
-];
 
 const emptyForm: FormValues = {
   aircraftType: "",
@@ -149,30 +102,11 @@ const emptyForm: FormValues = {
   checkItem: "",
   defectDesc: "",
   handling: "",
-  signer: ""
+  signer: "",
+  status: "待复核"
 };
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function parseReviewRecords(records: string[][]): ReviewRecord[] {
-  return records.map((record, index) => {
-    const aircraftType = record[0] || "";
-    const ataChapter = record[1] || "";
-    const checkArea = record[2] || "";
-    const status = record[3] || "";
-    const defectDesc = record[4] || "";
-    const handling = record[5] || "";
-    return {
-      id: `review-${index}`,
-      aircraftType,
-      ataChapter,
-      checkArea,
-      status,
-      defectDesc,
-      handling
-    };
-  });
-}
 
 function getStatusBadgeClass(status: string): string {
   const s = status.toLowerCase();
@@ -193,12 +127,10 @@ function MetricCard({ label, value, index }: { label: string; value: string; ind
 }
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
-
-  const [templates, setTemplates] = useState<CheckTemplate[]>(initialTemplates);
+  const [isLoading, setIsLoading] = useState(true);
+  const [templates, setTemplates] = useState<CheckTemplate[]>([]);
+  const [reviewRecords, setReviewRecords] = useState<ReviewRecord[]>([]);
+  const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
@@ -213,33 +145,121 @@ function App() {
     signer: ""
   });
   const [activeRole, setActiveRole] = useState<UserRole>("维修工程师");
-  const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [isExportPreviewOpen, setIsExportPreviewOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "failed">("idle");
 
-  const reviewRecords = useMemo(() => parseReviewRecords(project.records), []);
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const data = await initializeDatabase();
+        setTemplates(data.templates);
+        setReviewRecords(data.records);
+        setReviewNotes(data.reviewNotes);
+      } catch (error) {
+        console.error("Failed to initialize database:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  const refreshData = async () => {
+    try {
+      const [t, r, n] = await Promise.all([
+        getAllTemplates(),
+        getAllRecords(),
+        getAllReviewNotes()
+      ]);
+      setTemplates(t);
+      setReviewRecords(r);
+      setReviewNotes(n);
+    } catch (error) {
+      console.error("Failed to refresh data:", error);
+    }
+  };
+
+  const filteredRecords = useMemo(() => {
+    if (!activeFilter) return reviewRecords;
+    const filterLower = activeFilter.toLowerCase();
+    return reviewRecords.filter(r =>
+      r.checkArea.toLowerCase().includes(filterLower) ||
+      r.ataChapter.toLowerCase().includes(filterLower)
+    );
+  }, [reviewRecords, activeFilter]);
+
+  const values = project.metrics.map((metric: string, index: number) => {
+    const base = [reviewRecords.length, 0, 0, 0][index % 4];
+    if (metric === "缺陷项") {
+      return String(reviewRecords.filter(r => r.status.includes("缺陷")).length);
+    }
+    if (metric === "待复核") {
+      return String(reviewRecords.filter(r => r.status.includes("待复核")).length);
+    }
+    if (metric === "ATA章节") {
+      const chapters = new Set(reviewRecords.map(r => r.ataChapter));
+      return String(chapters.size);
+    }
+    if (metric === "完成率") {
+      const normal = reviewRecords.filter(r => r.status.includes("正常") || r.status.includes("完成")).length;
+      const total = reviewRecords.length;
+      return total > 0 ? `${Math.round((normal / total) * 100)}%` : "0%";
+    }
+    return String(base + index * 3);
+  });
 
   const reviewStats = useMemo(() => {
-    const total = reviewRecords.length;
+    const total = filteredRecords.length;
     let defect = 0;
     let pending = 0;
     let normal = 0;
     let commented = 0;
-    reviewRecords.forEach(r => {
+    filteredRecords.forEach(r => {
       if (r.status.includes("缺陷")) defect++;
       else if (r.status.includes("待复核")) pending++;
       else normal++;
       if (reviewNotes[r.id] && reviewNotes[r.id].trim().length > 0) commented++;
     });
     return { total, defect, pending, normal, commented };
-  }, [reviewRecords, reviewNotes]);
+  }, [filteredRecords, reviewNotes]);
 
-  const handleReviewNoteChange = (recordId: string, value: string) => {
+  const handleReviewNoteChange = async (recordId: string, value: string) => {
     setReviewNotes(prev => ({ ...prev, [recordId]: value }));
+    try {
+      await saveReviewNote(recordId, value);
+    } catch (error) {
+      console.error("Failed to save review note:", error);
+    }
   };
 
   const handleFormChange = (field: keyof FormValues, value: string) => {
     setFormValues(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleAddRecord = async () => {
+    if (!formValues.aircraftType || !formValues.ataChapter || !formValues.checkArea) {
+      alert("请填写机型、ATA章节和检查区域");
+      return;
+    }
+
+    const newRecord: ReviewRecord = {
+      id: `review-${Date.now()}`,
+      aircraftType: formValues.aircraftType,
+      ataChapter: formValues.ataChapter,
+      checkArea: formValues.checkArea,
+      status: formValues.status,
+      defectDesc: formValues.defectDesc,
+      handling: formValues.handling
+    };
+
+    try {
+      await addRecord(newRecord);
+      setReviewRecords(prev => [...prev, newRecord]);
+      setFormValues(emptyForm);
+    } catch (error) {
+      console.error("Failed to add record:", error);
+    }
   };
 
   const handleTemplateFormChange = (field: keyof TemplateFormValues, value: string) => {
@@ -281,29 +301,41 @@ function App() {
     setEditingTemplate(null);
   };
 
-  const saveTemplate = () => {
+  const saveTemplate = async () => {
     if (templateForm.name.trim() === "") return;
 
     if (editingTemplate) {
-      setTemplates(prev =>
-        prev.map(t =>
-        t.id === editingTemplate.id
-          ? { ...t, ...templateForm }
-          : t
-      )
-    );
+      const updated = { ...editingTemplate, ...templateForm };
+      try {
+        await updateTemplate(updated);
+        setTemplates(prev =>
+          prev.map(t => t.id === editingTemplate.id ? updated : t)
+        );
+      } catch (error) {
+        console.error("Failed to update template:", error);
+      }
     } else {
       const newTemplate: CheckTemplate = {
         id: String(Date.now()),
         ...templateForm
       };
-      setTemplates(prev => [...prev, newTemplate]);
+      try {
+        await addTemplate(newTemplate);
+        setTemplates(prev => [...prev, newTemplate]);
+      } catch (error) {
+        console.error("Failed to add template:", error);
+      }
     }
     closeModal();
   };
 
-  const deleteTemplate = (id: string) => {
-    setTemplates(prev => prev.filter(t => t.id !== id));
+  const deleteTemplate = async (id: string) => {
+    try {
+      await dbDeleteTemplate(id);
+      setTemplates(prev => prev.filter(t => t.id !== id));
+    } catch (error) {
+      console.error("Failed to delete template:", error);
+    }
   };
 
   const applyTemplate = (template: CheckTemplate) => {
@@ -314,7 +346,8 @@ function App() {
       checkItem: template.checkItem,
       defectDesc: template.defectDesc,
       handling: template.handling,
-      signer: template.signer
+      signer: template.signer,
+      status: "待复核"
     });
   };
 
@@ -377,6 +410,16 @@ function App() {
     setTimeout(() => setCopyStatus("idle"), 2000);
   };
 
+  if (isLoading) {
+    return (
+      <main className="app-shell">
+        <div className="empty-state" style={{ marginTop: 48 }}>
+          <p>正在加载数据...</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -389,7 +432,7 @@ function App() {
           <span>技术栈</span>
           <strong>{project.stack}</strong>
         </div>
-      </section>
+        </section>
 
       <section className="metrics-grid">
         {project.metrics.map((metric: string, index: number) => (
@@ -413,8 +456,20 @@ function App() {
           </div>
           <h2>筛选</h2>
           <div className="chips muted">
+            <button
+              className={activeFilter === null ? "chip-active" : ""}
+              onClick={() => setActiveFilter(null)}
+            >
+              全部
+            </button>
             {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
+              <button
+                key={filter}
+                className={activeFilter === filter ? "chip-active" : ""}
+                onClick={() => setActiveFilter(filter)}
+              >
+                {filter}
+              </button>
             ))}
           </div>
         </aside>
@@ -425,7 +480,7 @@ function App() {
               <p>{project.domain}</p>
               <h2>记录字段</h2>
             </div>
-            <button className="primary-action">新增记录</button>
+            <button className="primary-action" onClick={handleAddRecord}>新增记录</button>
           </div>
           <div className="field-grid">
             <label>
@@ -450,6 +505,14 @@ function App() {
                 placeholder="填写检查区域"
                 value={formValues.checkArea}
                 onChange={e => handleFormChange("checkArea", e.target.value)}
+              />
+            </label>
+            <label>
+              <span>状态</span>
+              <input
+                placeholder="选择状态"
+                value={formValues.status}
+                onChange={e => handleFormChange("status", e.target.value)}
               />
             </label>
             <label>
@@ -573,71 +636,83 @@ function App() {
           </div>
 
           <div className="review-list">
-            {reviewRecords.map((record, index) => (
-              <article key={record.id} className="review-card">
-                <div className="review-card-header">
-                  <div className="review-card-index">{String(index + 1).padStart(2, "0")}</div>
-                  <div className="review-card-title">
-                    <div className="review-card-top">
-                      <h3>{record.aircraftType}</h3>
-                      <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
-                        {record.status}
-                      </span>
-                    </div>
-                    <div className="review-card-meta">
-                      <span className="meta-tag">{record.ataChapter}</span>
-                      <span className="meta-tag meta-tag-muted">{record.checkArea}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="review-card-body">
-                  <div className="defect-section">
-                    <div className="section-label">缺陷说明</div>
-                    <div className="defect-content">
-                      {record.defectDesc ? record.defectDesc : "无缺陷描述"}
+            {filteredRecords.length === 0 ? (
+              <div className="empty-state">
+                <p>暂无符合筛选条件的记录</p>
+              </div>
+            ) : (
+              filteredRecords.map((record, index) => (
+                <article key={record.id} className="review-card">
+                  <div className="review-card-header">
+                    <div className="review-card-index">{String(index + 1).padStart(2, "0")}</div>
+                    <div className="review-card-title">
+                      <div className="review-card-top">
+                        <h3>{record.aircraftType}</h3>
+                        <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+                          {record.status}
+                        </span>
+                      </div>
+                      <div className="review-card-meta">
+                        <span className="meta-tag">{record.ataChapter}</span>
+                        <span className="meta-tag meta-tag-muted">{record.checkArea}</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="comment-section">
-                    <div className="section-label">
-                      讲评备注
-                      {reviewNotes[record.id]?.trim().length > 0 && (
-                        <span className="comment-indicator">已填写</span>
-                      )}
+                  <div className="review-card-body">
+                    <div className="defect-section">
+                      <div className="section-label">缺陷说明</div>
+                      <div className="defect-content">
+                        {record.defectDesc ? record.defectDesc : "无缺陷描述"}
+                      </div>
                     </div>
-                    <textarea
-                      className="comment-textarea"
-                      placeholder="请输入培训讲评意见，例如：针对该缺陷的处置要点、常见问题、注意事项..."
-                      rows={3}
-                      value={reviewNotes[record.id] || ""}
-                      onChange={e => handleReviewNoteChange(record.id, e.target.value)}
-                    />
+
+                    <div className="comment-section">
+                      <div className="section-label">
+                        讲评备注
+                        {reviewNotes[record.id]?.trim().length > 0 && (
+                          <span className="comment-indicator">已填写</span>
+                        )}
+                      </div>
+                      <textarea
+                        className="comment-textarea"
+                        placeholder="请输入培训讲评意见，例如：针对该缺陷的处置要点、常见问题、注意事项..."
+                        rows={3}
+                        value={reviewNotes[record.id] || ""}
+                        onChange={e => handleReviewNoteChange(record.id, e.target.value)}
+                      />
+                    </div>
                   </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              ))
+            )}
           </div>
         </section>
       ) : (
         <section className="records panel">
           <div className="section-heading">
             <div>
-              <p>示例数据</p>
+              <p>检查记录</p>
               <h2>近期记录</h2>
             </div>
             <button onClick={openExportPreview}>导出摘要</button>
           </div>
           <div className="record-list">
-            {project.records.map((record: string[], index: number) => (
-              <article key={record.join("-")} className="record-card">
-                <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-                <div>
-                  <h3>{record[0]}</h3>
-                  <p>{record.slice(1).join(" · ")}</p>
-                </div>
-              </article>
-            ))}
+            {filteredRecords.length === 0 ? (
+              <div className="empty-state">
+                <p>暂无记录，点击"新增记录"创建第一条检查记录</p>
+              </div>
+            ) : (
+              filteredRecords.map((record, index) => (
+                <article key={record.id} className="record-card">
+                  <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
+                  <div>
+                    <h3>{record.aircraftType}</h3>
+                    <p>{[record.ataChapter, record.checkArea, record.status, record.defectDesc].filter(Boolean).join(" · ")}</p>
+                  </div>
+                </article>
+              ))
+            )}
           </div>
         </section>
       )}
