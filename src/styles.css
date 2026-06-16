@@ -726,6 +726,12 @@ input {
   flex-shrink: 0;
 }
 
+.copy-failed {
+  background: #e11d48;
+  border-color: #e11d48;
+  color: #ffffff;
+}
+
 @media (max-width: 860px) {
   .hero,
   .workspace,

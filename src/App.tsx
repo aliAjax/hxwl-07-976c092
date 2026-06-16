@@ -99,6 +99,7 @@ interface ReviewRecord {
   checkArea: string;
   status: string;
   defectDesc: string;
+  handling: string;
 }
 
 interface ReviewState {
@@ -160,13 +161,15 @@ function parseReviewRecords(records: string[][]): ReviewRecord[] {
     const checkArea = record[2] || "";
     const status = record[3] || "";
     const defectDesc = record[4] || "";
+    const handling = record[5] || "";
     return {
       id: `review-${index}`,
       aircraftType,
       ataChapter,
       checkArea,
       status,
-      defectDesc
+      defectDesc,
+      handling
     };
   });
 }
@@ -212,7 +215,7 @@ function App() {
   const [activeRole, setActiveRole] = useState<UserRole>("维修工程师");
   const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
   const [isExportPreviewOpen, setIsExportPreviewOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "failed">("idle");
 
   const reviewRecords = useMemo(() => parseReviewRecords(project.records), []);
 
@@ -328,8 +331,7 @@ function App() {
       lines.push(`  ATA章节: ${record.ataChapter}`);
       lines.push(`  检查区域: ${record.checkArea}`);
       lines.push(`  缺陷描述: ${record.defectDesc || "无"}`);
-      const handling = reviewNotes[record.id]?.trim() || "待处理";
-      lines.push(`  处理意见: ${handling}`);
+      lines.push(`  处理意见: ${record.handling || "待处理"}`);
       lines.push(`  状态: ${record.status}`);
       lines.push("");
     });
@@ -342,10 +344,10 @@ function App() {
     lines.push("=".repeat(50));
 
     return lines.join("\n");
-  }, [reviewRecords, reviewNotes, reviewStats]);
+  }, [reviewRecords, reviewStats]);
 
   const openExportPreview = () => {
-    setCopied(false);
+    setCopyStatus("idle");
     setIsExportPreviewOpen(true);
   };
 
@@ -356,11 +358,23 @@ function App() {
   const copyToClipboard = async () => {
     try {
       await navigator.clipboard.writeText(generateExportSummary);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopyStatus("success");
     } catch (err) {
-      console.error("复制失败:", err);
+      const textarea = document.createElement("textarea");
+      textarea.value = generateExportSummary;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        setCopyStatus("success");
+      } catch (fallbackErr) {
+        setCopyStatus("failed");
+      }
+      document.body.removeChild(textarea);
     }
+    setTimeout(() => setCopyStatus("idle"), 2000);
   };
 
   return (
@@ -725,8 +739,11 @@ function App() {
             </div>
             <div className="export-preview-footer">
               <button onClick={closeExportPreview}>关闭</button>
-              <button className="primary-action" onClick={copyToClipboard}>
-                {copied ? "已复制" : "复制内容"}
+              <button
+                className={`primary-action ${copyStatus === "failed" ? "copy-failed" : ""}`}
+                onClick={copyToClipboard}
+              >
+                {copyStatus === "success" ? "已复制" : copyStatus === "failed" ? "复制失败，请手动选择" : "复制内容"}
               </button>
             </div>
           </div>
