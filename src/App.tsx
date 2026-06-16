@@ -213,7 +213,7 @@ function App() {
   };
 
   const saveTemplate = () => {
-    if (!templateForm.name.trim() === "") return;
+    if (templateForm.name.trim() === "") return;
 
     if (editingTemplate) {
       setTemplates(prev =>
