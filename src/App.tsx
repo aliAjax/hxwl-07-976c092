@@ -78,6 +78,8 @@ interface CheckTemplate {
   signer: string;
 }
 
+type TemplateFormValues = Omit<CheckTemplate, "id">;
+
 interface FormValues {
   aircraftType: string;
   ataChapter: string;
@@ -117,6 +119,7 @@ const initialTemplates: CheckTemplate[] = [
     aircraftType: "ARJ21",
     ataChapter: "ATA 27",
     checkArea: "飞控",
+    checkItem: "副翼作动测试、升降舵响应检查、方向舵行程检查",
     defectDesc: "",
     handling: "",
     signer: ""
@@ -155,7 +158,7 @@ function App() {
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
-  const [templateForm, setTemplateForm] = useState<Omit<CheckTemplate, "id">({
+  const [templateForm, setTemplateForm] = useState<TemplateFormValues>({
     name: "",
     aircraftType: "",
     ataChapter: "",
@@ -170,7 +173,7 @@ function App() {
     setFormValues(prev => ({ ...prev, [field]: value }));
   };
 
-  const handleTemplateFormChange = (field: keyof Omit<CheckTemplate, "id">, value: string) => {
+  const handleTemplateFormChange = (field: keyof TemplateFormValues, value: string) => {
     setTemplateForm(prev => ({ ...prev, [field]: value }));
   };
 
