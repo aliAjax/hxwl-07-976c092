@@ -211,6 +211,8 @@ function App() {
   });
   const [activeRole, setActiveRole] = useState<UserRole>("维修工程师");
   const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
+  const [isExportPreviewOpen, setIsExportPreviewOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const reviewRecords = useMemo(() => parseReviewRecords(project.records), []);
 
@@ -311,6 +313,54 @@ function App() {
       handling: template.handling,
       signer: template.signer
     });
+  };
+
+  const generateExportSummary = useMemo(() => {
+    const lines: string[] = [];
+    lines.push("航空维修检查记录摘要");
+    lines.push("=".repeat(50));
+    lines.push(`生成时间: ${new Date().toLocaleString("zh-CN")}`);
+    lines.push("");
+
+    reviewRecords.forEach((record, index) => {
+      lines.push(`【记录 ${String(index + 1).padStart(2, "0")}】`);
+      lines.push(`  机型: ${record.aircraftType}`);
+      lines.push(`  ATA章节: ${record.ataChapter}`);
+      lines.push(`  检查区域: ${record.checkArea}`);
+      lines.push(`  缺陷描述: ${record.defectDesc || "无"}`);
+      const handling = reviewNotes[record.id]?.trim() || "待处理";
+      lines.push(`  处理意见: ${handling}`);
+      lines.push(`  状态: ${record.status}`);
+      lines.push("");
+    });
+
+    lines.push("-".repeat(50));
+    lines.push(`统计信息: 共 ${reviewStats.total} 条记录`);
+    lines.push(`  正常: ${reviewStats.normal} 条`);
+    lines.push(`  待复核: ${reviewStats.pending} 条`);
+    lines.push(`  缺陷项: ${reviewStats.defect} 条`);
+    lines.push("=".repeat(50));
+
+    return lines.join("\n");
+  }, [reviewRecords, reviewNotes, reviewStats]);
+
+  const openExportPreview = () => {
+    setCopied(false);
+    setIsExportPreviewOpen(true);
+  };
+
+  const closeExportPreview = () => {
+    setIsExportPreviewOpen(false);
+  };
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(generateExportSummary);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("复制失败:", err);
+    }
   };
 
   return (
@@ -562,7 +612,7 @@ function App() {
               <p>示例数据</p>
               <h2>近期记录</h2>
             </div>
-            <button>导出摘要</button>
+            <button onClick={openExportPreview}>导出摘要</button>
           </div>
           <div className="record-list">
             {project.records.map((record: string[], index: number) => (
@@ -657,6 +707,26 @@ function App() {
               <button onClick={closeModal}>取消</button>
               <button className="primary-action" onClick={saveTemplate}>
                 保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isExportPreviewOpen && (
+        <div className="modal-overlay" onClick={closeExportPreview}>
+          <div className="export-preview-content" onClick={e => e.stopPropagation()}>
+            <div className="export-preview-header">
+              <h2>导出摘要预览</h2>
+              <button className="close-btn" onClick={closeExportPreview}>×</button>
+            </div>
+            <div className="export-preview-body">
+              <pre className="export-summary-text">{generateExportSummary}</pre>
+            </div>
+            <div className="export-preview-footer">
+              <button onClick={closeExportPreview}>关闭</button>
+              <button className="primary-action" onClick={copyToClipboard}>
+                {copied ? "已复制" : "复制内容"}
               </button>
             </div>
           </div>
