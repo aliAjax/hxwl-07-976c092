@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import "./styles.css";
+
+type UserRole = "维修工程师" | "放行人员" | "培训教员";
 
 const project = {
   "id": "hxwl-07",
@@ -17,7 +19,7 @@ const project = {
     "维修工程师",
     "放行人员",
     "培训教员"
-  ],
+  ] as UserRole[],
   "metrics": [
     "完成率",
     "缺陷项",
@@ -90,6 +92,19 @@ interface FormValues {
   signer: string;
 }
 
+interface ReviewRecord {
+  id: string;
+  aircraftType: string;
+  ataChapter: string;
+  checkArea: string;
+  status: string;
+  defectDesc: string;
+}
+
+interface ReviewState {
+  [recordId: string]: string;
+}
+
 const initialTemplates: CheckTemplate[] = [
   {
     id: "1",
@@ -138,6 +153,32 @@ const emptyForm: FormValues = {
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
 
+function parseReviewRecords(records: string[][]): ReviewRecord[] {
+  return records.map((record, index) => {
+    const aircraftType = record[0] || "";
+    const ataChapter = record[1] || "";
+    const checkArea = record[2] || "";
+    const status = record[3] || "";
+    const defectDesc = record[4] || "";
+    return {
+      id: `review-${index}`,
+      aircraftType,
+      ataChapter,
+      checkArea,
+      status,
+      defectDesc
+    };
+  });
+}
+
+function getStatusBadgeClass(status: string): string {
+  const s = status.toLowerCase();
+  if (s.includes("正常") || s.includes("完成")) return "status-badge-ok";
+  if (s.includes("待复核") || s.includes("待")) return "status-badge-watch";
+  if (s.includes("缺陷")) return "status-badge-danger";
+  return "status-badge-default";
+}
+
 function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
   return (
     <article className="metric-card">
@@ -168,6 +209,29 @@ function App() {
     handling: "",
     signer: ""
   });
+  const [activeRole, setActiveRole] = useState<UserRole>("维修工程师");
+  const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
+
+  const reviewRecords = useMemo(() => parseReviewRecords(project.records), []);
+
+  const reviewStats = useMemo(() => {
+    const total = reviewRecords.length;
+    let defect = 0;
+    let pending = 0;
+    let normal = 0;
+    let commented = 0;
+    reviewRecords.forEach(r => {
+      if (r.status.includes("缺陷")) defect++;
+      else if (r.status.includes("待复核")) pending++;
+      else normal++;
+      if (reviewNotes[r.id] && reviewNotes[r.id].trim().length > 0) commented++;
+    });
+    return { total, defect, pending, normal, commented };
+  }, [reviewRecords, reviewNotes]);
+
+  const handleReviewNoteChange = (recordId: string, value: string) => {
+    setReviewNotes(prev => ({ ...prev, [recordId]: value }));
+  };
 
   const handleFormChange = (field: keyof FormValues, value: string) => {
     setFormValues(prev => ({ ...prev, [field]: value }));
@@ -273,8 +337,14 @@ function App() {
         <aside className="panel narrow">
           <h2>角色</h2>
           <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
+            {project.users.map((user: UserRole) => (
+              <button
+                key={user}
+                className={activeRole === user ? "chip-active" : ""}
+                onClick={() => setActiveRole(user)}
+              >
+                {user}
+              </button>
             ))}
           </div>
           <h2>筛选</h2>
@@ -401,26 +471,112 @@ function App() {
         </div>
       </section>
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
+      {activeRole === "培训教员" ? (
+        <section className="review-panel">
+          <div className="section-heading">
+            <div>
+              <p>培训讲评</p>
+              <h2>检查讲评视图</h2>
+            </div>
+            <div className="review-actions">
+              <button className="review-summary-btn">
+                讲评进度 {reviewStats.commented}/{reviewStats.total}
+              </button>
+            </div>
           </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+
+          <div className="review-metrics">
+            <div className="review-metric">
+              <span>记录总数</span>
+              <strong>{reviewStats.total}</strong>
+            </div>
+            <div className="review-metric review-metric-ok">
+              <span>正常</span>
+              <strong>{reviewStats.normal}</strong>
+            </div>
+            <div className="review-metric review-metric-watch">
+              <span>待复核</span>
+              <strong>{reviewStats.pending}</strong>
+            </div>
+            <div className="review-metric review-metric-danger">
+              <span>缺陷项</span>
+              <strong>{reviewStats.defect}</strong>
+            </div>
+            <div className="review-metric review-metric-primary">
+              <span>已讲评</span>
+              <strong>{reviewStats.commented}</strong>
+            </div>
+          </div>
+
+          <div className="review-list">
+            {reviewRecords.map((record, index) => (
+              <article key={record.id} className="review-card">
+                <div className="review-card-header">
+                  <div className="review-card-index">{String(index + 1).padStart(2, "0")}</div>
+                  <div className="review-card-title">
+                    <div className="review-card-top">
+                      <h3>{record.aircraftType}</h3>
+                      <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+                        {record.status}
+                      </span>
+                    </div>
+                    <div className="review-card-meta">
+                      <span className="meta-tag">{record.ataChapter}</span>
+                      <span className="meta-tag meta-tag-muted">{record.checkArea}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="review-card-body">
+                  <div className="defect-section">
+                    <div className="section-label">缺陷说明</div>
+                    <div className="defect-content">
+                      {record.defectDesc ? record.defectDesc : "无缺陷描述"}
+                    </div>
+                  </div>
+
+                  <div className="comment-section">
+                    <div className="section-label">
+                      讲评备注
+                      {reviewNotes[record.id]?.trim().length > 0 && (
+                        <span className="comment-indicator">已填写</span>
+                      )}
+                    </div>
+                    <textarea
+                      className="comment-textarea"
+                      placeholder="请输入培训讲评意见，例如：针对该缺陷的处置要点、常见问题、注意事项..."
+                      rows={3}
+                      value={reviewNotes[record.id] || ""}
+                      onChange={e => handleReviewNoteChange(record.id, e.target.value)}
+                    />
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="records panel">
+          <div className="section-heading">
+            <div>
+              <p>示例数据</p>
+              <h2>近期记录</h2>
+            </div>
+            <button>导出摘要</button>
+          </div>
+          <div className="record-list">
+            {project.records.map((record: string[], index: number) => (
+              <article key={record.join("-")} className="record-card">
+                <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
+                <div>
+                  <h3>{record[0]}</h3>
+                  <p>{record.slice(1).join(" · ")}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       {isModalOpen && (
         <div className="modal-overlay" onClick={closeModal}>
