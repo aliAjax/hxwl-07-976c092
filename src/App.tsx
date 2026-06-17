@@ -26,6 +26,24 @@ import {
   deleteDefect
 } from "./db";
 import {
+  WorkflowConfig,
+  FieldConfig,
+  findWorkflowConfig,
+  getStatusBadgeClass,
+  getDefectStatusBadgeClass,
+  getDefectStatusText,
+  getAllAircraftTypes,
+  getAtaChaptersByAircraft,
+  getCheckAreasByAircraftAndAta,
+  canRoleEditField
+} from "./workflow";
+import {
+  workflowConfigs,
+  getGlobalMetrics,
+  getGlobalFilters,
+  getGlobalFields
+} from "./workflowConfigs";
+import {
   NetworkStatus,
   SyncStatus,
   SyncOperation,
@@ -67,54 +85,7 @@ const project = {
     "维修工程师",
     "放行人员",
     "培训教员"
-  ] as UserRole[],
-  "metrics": [
-    "完成率",
-    "缺陷项",
-    "待复核",
-    "待处理缺陷",
-    "ATA章节"
-  ],
-  "filters": [
-    "机体",
-    "动力装置",
-    "航电",
-    "起落架"
-  ],
-  "fields": [
-    "机型",
-    "ATA章节",
-    "检查区域",
-    "检查项目",
-    "缺陷描述",
-    "处理意见",
-    "签署人"
-  ],
-  "records": [
-    [
-      "A320",
-      "ATA 32",
-      "起落架",
-      "待复核",
-      "主轮磨耗接近限制"
-    ],
-    [
-      "B737",
-      "ATA 24",
-      "电源系统",
-      "正常",
-      "正常",
-      "正常",
-      "完成"
-    ],
-    [
-      "ARJ21",
-      "ATA 27",
-      "飞控",
-      "缺陷",
-      "副翼作动测试需复查"
-    ]
-  ]
+  ] as UserRole[]
 };
 
 type TemplateFormValues = Omit<CheckTemplate, "id">;
@@ -142,14 +113,6 @@ const emptyForm: FormValues = {
 };
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function getStatusBadgeClass(status: string): string {
-  const s = status.toLowerCase();
-  if (s.includes("正常") || s.includes("完成")) return "status-badge-ok";
-  if (s.includes("待复核") || s.includes("待")) return "status-badge-watch";
-  if (s.includes("缺陷")) return "status-badge-danger";
-  return "status-badge-default";
-}
 
 function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
   return (
@@ -323,35 +286,7 @@ function ReleaseReviewCard({
   );
 }
 
-function getDefectStatusBadgeClass(status: DefectStatus): string {
-  switch (status) {
-    case "pending":
-      return "defect-status-badge-pending";
-    case "processing":
-      return "defect-status-badge-processing";
-    case "completed":
-      return "defect-status-badge-completed";
-    case "rejected":
-      return "defect-status-badge-rejected";
-    default:
-      return "defect-status-badge-pending";
-  }
-}
 
-function getDefectStatusText(status: DefectStatus): string {
-  switch (status) {
-    case "pending":
-      return "待处理";
-    case "processing":
-      return "处理中";
-    case "completed":
-      return "已完成";
-    case "rejected":
-      return "已退回";
-    default:
-      return status;
-  }
-}
 
 interface DefectCardProps {
   defect: DefectItem;
@@ -568,6 +503,78 @@ function DefectCard({
   );
 }
 
+function DynamicFormField({
+  field,
+  value,
+  onChange,
+  disabled = false
+}: {
+  field: FieldConfig;
+  value: string;
+  onChange: (key: string, value: string) => void;
+  disabled?: boolean;
+}) {
+  const baseClassName = field.fullWidth ? "full-width" : "";
+
+  if (field.type === "select") {
+    return (
+      <label className={baseClassName}>
+        <span>
+          {field.label}
+          {field.required && <span className="required-mark">*</span>}
+        </span>
+        <select
+          value={value}
+          onChange={e => onChange(field.key, e.target.value)}
+          disabled={disabled}
+          className={disabled ? "disabled-input" : ""}
+        >
+          <option value="">{field.placeholder || `请选择${field.label}`}</option>
+          {field.options?.map(opt => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  if (field.type === "textarea") {
+    return (
+      <label className={baseClassName}>
+        <span>
+          {field.label}
+          {field.required && <span className="required-mark">*</span>}
+        </span>
+        <textarea
+          placeholder={field.placeholder}
+          value={value}
+          onChange={e => onChange(field.key, e.target.value)}
+          disabled={disabled}
+          rows={3}
+          className={disabled ? "disabled-input" : ""}
+        />
+      </label>
+    );
+  }
+
+  return (
+    <label className={baseClassName}>
+      <span>
+        {field.label}
+        {field.required && <span className="required-mark">*</span>}
+      </span>
+      <input
+        type="text"
+        placeholder={field.placeholder}
+        value={value}
+        onChange={e => onChange(field.key, e.target.value)}
+        disabled={disabled}
+        className={disabled ? "disabled-input" : ""}
+      />
+    </label>
+  );
+}
+
 function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [templates, setTemplates] = useState<CheckTemplate[]>([]);
@@ -723,6 +730,99 @@ function App() {
     await getCacheInfo();
   };
 
+  const currentWorkflowConfig = useMemo(() => {
+    if (formValues.aircraftType && formValues.ataChapter && formValues.checkArea) {
+      return findWorkflowConfig(workflowConfigs, formValues.aircraftType, formValues.ataChapter, formValues.checkArea);
+    }
+    return workflowConfigs[0];
+  }, [formValues.aircraftType, formValues.ataChapter, formValues.checkArea]);
+
+  const availableAircraftTypes = useMemo(() => getAllAircraftTypes(workflowConfigs), []);
+  const availableAtaChapters = useMemo(
+    () => formValues.aircraftType ? getAtaChaptersByAircraft(workflowConfigs, formValues.aircraftType) : [],
+    [formValues.aircraftType]
+  );
+  const availableCheckAreas = useMemo(
+    () => formValues.aircraftType && formValues.ataChapter
+      ? getCheckAreasByAircraftAndAta(workflowConfigs, formValues.aircraftType, formValues.ataChapter)
+      : [],
+    [formValues.aircraftType, formValues.ataChapter]
+  );
+
+  const globalMetrics = useMemo(() => getGlobalMetrics(), []);
+  const globalFilters = useMemo(() => getGlobalFilters(), []);
+  const globalFields = useMemo(() => getGlobalFields(), []);
+
+  const getFormFieldValue = (key: string): string => {
+    const formAny = formValues as any;
+    return formAny[key] || "";
+  };
+
+  const handleFormFieldChange = (key: string, value: string) => {
+    setFormValues(prev => {
+      const next = { ...prev } as any;
+      next[key] = value;
+      if (key === "aircraftType") {
+        next.ataChapter = "";
+        next.checkArea = "";
+      } else if (key === "ataChapter") {
+        next.checkArea = "";
+      }
+      return next;
+    });
+  };
+
+  const getVisibleFields = (config: WorkflowConfig | undefined): FieldConfig[] => {
+    if (!config) {
+      return [
+        { key: "aircraftType", label: "机型", type: "select", required: true, options: availableAircraftTypes, placeholder: "选择机型" },
+        { key: "ataChapter", label: "ATA章节", type: "select", required: true, options: availableAtaChapters, placeholder: "选择ATA章节" },
+        { key: "checkArea", label: "检查区域", type: "select", required: true, options: availableCheckAreas, placeholder: "选择检查区域" },
+        { key: "checkItem", label: "检查项目", type: "text", required: false, placeholder: "填写检查项目" },
+        { key: "status", label: "状态", type: "text", required: true, placeholder: "选择状态" },
+        { key: "defectDesc", label: "缺陷描述", type: "text", required: false, placeholder: "填写缺陷描述" },
+        { key: "handling", label: "处理意见", type: "text", required: false, placeholder: "填写处理意见" },
+        { key: "signer", label: "签署人", type: "text", required: false, placeholder: "填写签署人", fullWidth: true }
+      ];
+    }
+    return config.fields;
+  };
+
+  const calculateMetricValue = (metricKey: string): string => {
+    switch (metricKey) {
+      case "completionRate": {
+        const completedCount = reviewRecords.filter(r => {
+          if (r.status.includes("缺陷")) return false;
+          const review = releaseReviews[r.id];
+          return review && review.status === "passed";
+        }).length;
+        const total = reviewRecords.length;
+        return total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "0%";
+      }
+      case "defectCount":
+        return String(reviewRecords.filter(r => r.status.includes("缺陷")).length);
+      case "pendingReview": {
+        const pendingCount = reviewRecords.filter(r => {
+          const review = releaseReviews[r.id];
+          return !review;
+        }).length;
+        return String(pendingCount);
+      }
+      case "pendingDefects": {
+        const pendingDefects = Object.values(defects).filter(d =>
+          d.status === "pending" || d.status === "processing"
+        ).length;
+        return String(pendingDefects);
+      }
+      case "ataChapters": {
+        const chapters = new Set(reviewRecords.map(r => r.ataChapter));
+        return String(chapters.size);
+      }
+      default:
+        return "0";
+    }
+  };
+
   const filteredRecords = useMemo(() => {
     if (!activeFilter) return reviewRecords;
     const filterLower = activeFilter.toLowerCase();
@@ -732,48 +832,12 @@ function App() {
     );
   }, [reviewRecords, activeFilter]);
 
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [reviewRecords.length, 0, 0, 0, 0][index % 5];
-    if (metric === "缺陷项") {
-      return String(reviewRecords.filter(r => r.status.includes("缺陷")).length);
-    }
-    if (metric === "待复核") {
-      const pendingCount = reviewRecords.filter(r => {
-        const review = releaseReviews[r.id];
-        if (r.status.includes("缺陷")) {
-          return !review;
-        }
-        if (r.status.includes("待复核")) {
-          return !review;
-        }
-        if (r.status.includes("正常") || r.status.includes("完成")) {
-          return !review;
-        }
-        return !review;
-      }).length;
-      return String(pendingCount);
-    }
-    if (metric === "待处理缺陷") {
-      const pendingDefects = Object.values(defects).filter(d =>
-        d.status === "pending" || d.status === "processing"
-      ).length;
-      return String(pendingDefects);
-    }
-    if (metric === "ATA章节") {
-      const chapters = new Set(reviewRecords.map(r => r.ataChapter));
-      return String(chapters.size);
-    }
-    if (metric === "完成率") {
-      const completedCount = reviewRecords.filter(r => {
-        if (r.status.includes("缺陷")) return false;
-        const review = releaseReviews[r.id];
-        return review && review.status === "passed";
-      }).length;
-      const total = reviewRecords.length;
-      return total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "0%";
-    }
-    return String(base + index * 3);
-  });
+  const metricValues = useMemo(() => {
+    return globalMetrics.map(metric => ({
+      ...metric,
+      value: calculateMetricValue(metric.key)
+    }));
+  }, [globalMetrics, reviewRecords, releaseReviews, defects]);
 
   const reviewStats = useMemo(() => {
     const total = filteredRecords.length;
@@ -1598,8 +1662,8 @@ function App() {
         </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+        {metricValues.map((metric, index) => (
+          <MetricCard key={metric.key} label={metric.label} value={metric.value} index={metric.colorIndex} />
         ))}
       </section>
 
@@ -1684,13 +1748,13 @@ function App() {
             >
               全部
             </button>
-            {project.filters.map((filter: string) => (
+            {globalFilters.map(filter => (
               <button
-                key={filter}
-                className={activeFilter === filter ? "chip-active" : ""}
-                onClick={() => setActiveFilter(filter)}
+                key={filter.key}
+                className={activeFilter === filter.label ? "chip-active" : ""}
+                onClick={() => setActiveFilter(filter.label)}
               >
-                {filter}
+                {filter.label}
               </button>
             ))}
           </div>
@@ -1701,74 +1765,36 @@ function App() {
             <div>
               <p>{project.domain}</p>
               <h2>记录字段</h2>
+              {currentWorkflowConfig && (
+                <p className="workflow-info">当前流程：{currentWorkflowConfig.displayName}</p>
+              )}
             </div>
             <button className="primary-action" onClick={handleAddRecord}>新增记录</button>
           </div>
           <div className="field-grid">
-            <label>
-              <span>机型</span>
-              <input
-                placeholder="填写机型"
-                value={formValues.aircraftType}
-                onChange={e => handleFormChange("aircraftType", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>ATA章节</span>
-              <input
-                placeholder="填写ATA章节"
-                value={formValues.ataChapter}
-                onChange={e => handleFormChange("ataChapter", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>检查区域</span>
-              <input
-                placeholder="填写检查区域"
-                value={formValues.checkArea}
-                onChange={e => handleFormChange("checkArea", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>状态</span>
-              <input
-                placeholder="选择状态"
-                value={formValues.status}
-                onChange={e => handleFormChange("status", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>检查项目</span>
-              <input
-                placeholder="填写检查项目"
-                value={formValues.checkItem}
-                onChange={e => handleFormChange("checkItem", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>缺陷描述</span>
-              <input
-                placeholder="填写缺陷描述"
-                value={formValues.defectDesc}
-                onChange={e => handleFormChange("defectDesc", e.target.value)}
-              />
-            </label>
-            <label>
-              <span>处理意见</span>
-              <input
-                placeholder="填写处理意见"
-                value={formValues.handling}
-                onChange={e => handleFormChange("handling", e.target.value)}
-              />
-            </label>
-            <label className="full-width">
-              <span>签署人</span>
-              <input
-                placeholder="填写签署人"
-                value={formValues.signer}
-                onChange={e => handleFormChange("signer", e.target.value)}
-              />
-            </label>
+            {getVisibleFields(currentWorkflowConfig).map(field => {
+              const isEditable = !currentWorkflowConfig || canRoleEditField(currentWorkflowConfig, field.key, activeRole);
+              let options = field.options;
+              if (field.key === "aircraftType") {
+                options = availableAircraftTypes;
+              } else if (field.key === "ataChapter") {
+                options = availableAtaChapters;
+              } else if (field.key === "checkArea") {
+                options = availableCheckAreas;
+              } else if (field.key === "status" && currentWorkflowConfig) {
+                options = currentWorkflowConfig.statuses;
+              }
+              const fieldWithOptions = { ...field, options };
+              return (
+                <DynamicFormField
+                  key={field.key}
+                  field={fieldWithOptions}
+                  value={getFormFieldValue(field.key)}
+                  onChange={handleFormFieldChange}
+                  disabled={!isEditable}
+                />
+              );
+            })}
           </div>
         </section>
       </section>
