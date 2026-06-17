@@ -171,24 +171,6 @@ export const workflowConfigs: WorkflowConfig[] = [
     ],
     filters: [
       {
-        key: "airframe",
-        label: "机体",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "powerplant",
-        label: "动力装置",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "avionics",
-        label: "航电",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
         key: "landingGear",
         label: "起落架",
         type: "area",
@@ -383,26 +365,8 @@ export const workflowConfigs: WorkflowConfig[] = [
     ],
     filters: [
       {
-        key: "airframe",
-        label: "机体",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "powerplant",
-        label: "动力装置",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "avionics",
-        label: "航电",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "landingGear",
-        label: "起落架",
+        key: "power",
+        label: "电源系统",
         type: "area",
         matchField: "checkArea"
       }
@@ -595,26 +559,8 @@ export const workflowConfigs: WorkflowConfig[] = [
     ],
     filters: [
       {
-        key: "airframe",
-        label: "机体",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "powerplant",
-        label: "动力装置",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "avionics",
-        label: "航电",
-        type: "area",
-        matchField: "checkArea"
-      },
-      {
-        key: "landingGear",
-        label: "起落架",
+        key: "flightControl",
+        label: "飞控",
         type: "area",
         matchField: "checkArea"
       }

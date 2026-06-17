@@ -36,22 +36,19 @@ import {
   getAtaChaptersByAircraft,
   getCheckAreasByAircraftAndAta,
   canRoleEditField,
+  getAvailableStatusTransitions,
   validateRequiredFields,
   calculateMetricValue,
   getMatrixCellStatus,
-  groupRecordsByStatus,
   getRecordDisplayFields,
   canCreateDefect,
-  getStatusCategory,
-  getStatusList,
   getInitialStatus,
   StatusCategory
 } from "./workflow";
 import {
   workflowConfigs,
   getGlobalMetrics,
-  getGlobalFilters,
-  getGlobalFields
+  getGlobalFilters
 } from "./workflowConfigs";
 import {
   NetworkStatus,
@@ -761,7 +758,34 @@ function App() {
 
   const globalMetrics = useMemo(() => getGlobalMetrics(), []);
   const globalFilters = useMemo(() => getGlobalFilters(), []);
-  const globalFields = useMemo(() => getGlobalFields(), []);
+  const activeMetrics = currentWorkflowConfig?.metrics ?? globalMetrics;
+  const activeFilters = currentWorkflowConfig?.filters ?? globalFilters;
+
+  const allowedStatusOptions = useMemo(() => {
+    const initialStatus = getInitialStatus(currentWorkflowConfig);
+    if (!currentWorkflowConfig) return [initialStatus];
+    const transitionTargets = getAvailableStatusTransitions(
+      currentWorkflowConfig,
+      initialStatus,
+      activeRole
+    ).map(transition => transition.to);
+    return Array.from(new Set([initialStatus, ...transitionTargets]));
+  }, [currentWorkflowConfig, activeRole]);
+
+  useEffect(() => {
+    const initialStatus = getInitialStatus(currentWorkflowConfig);
+    setFormValues(prev => (
+      allowedStatusOptions.includes(prev.status)
+        ? prev
+        : { ...prev, status: initialStatus }
+    ));
+  }, [currentWorkflowConfig, allowedStatusOptions]);
+
+  useEffect(() => {
+    if (activeFilter && !activeFilters.some(filter => filter.key === activeFilter)) {
+      setActiveFilter(null);
+    }
+  }, [activeFilter, activeFilters]);
 
   const getFormFieldValue = (key: string): string => {
     const formAny = formValues as any;
@@ -798,52 +822,18 @@ function App() {
     return config.fields;
   };
 
-  const computeMetricValue = (metric: { key: string; label: string; colorIndex: number; type?: string; source?: string; filter?: any }): string => {
-    switch (metric.key) {
-      case "completionRate": {
-        const completedCount = reviewRecords.filter(r => {
-          if (r.status.includes("缺陷")) return false;
-          const review = releaseReviews[r.id];
-          return review && review.status === "passed";
-        }).length;
-        const total = reviewRecords.length;
-        return total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "0%";
-      }
-      case "defectCount":
-        return String(reviewRecords.filter(r => r.status.includes("缺陷")).length);
-      case "pendingReview": {
-        const pendingCount = reviewRecords.filter(r => {
-          const review = releaseReviews[r.id];
-          return !review;
-        }).length;
-        return String(pendingCount);
-      }
-      case "pendingDefects": {
-        const pendingDefects = Object.values(defects).filter(d =>
-          d.status === "pending" || d.status === "processing"
-        ).length;
-        return String(pendingDefects);
-      }
-      case "ataChapters": {
-        const chapters = new Set(reviewRecords.map(r => r.ataChapter));
-        return String(chapters.size);
-      }
-      default:
-        return "0";
-    }
-  };
-
   const filteredRecords = useMemo(() => {
     if (!activeFilter) return reviewRecords;
-    const filterLower = activeFilter.toLowerCase();
-    return reviewRecords.filter(r =>
-      r.checkArea.toLowerCase().includes(filterLower) ||
-      r.ataChapter.toLowerCase().includes(filterLower)
-    );
-  }, [reviewRecords, activeFilter]);
+    const selectedFilter = activeFilters.find(filter => filter.key === activeFilter);
+    if (!selectedFilter) return reviewRecords;
+    return reviewRecords.filter(record => {
+      const value = String((record as any)[selectedFilter.matchField] ?? "");
+      return value === selectedFilter.label;
+    });
+  }, [reviewRecords, activeFilter, activeFilters]);
 
   const metricValues = useMemo(() => {
-    return globalMetrics.map(metric => {
+    return activeMetrics.map(metric => {
       if (metric.key === "completionRate") {
         const completedCount = reviewRecords.filter(r => {
           if (r.status.includes("缺陷")) return false;
@@ -861,7 +851,7 @@ function App() {
         value: calculateMetricValue(metric, reviewRecords, defects, releaseReviews)
       };
     });
-  }, [globalMetrics, reviewRecords, releaseReviews, defects]);
+  }, [activeMetrics, reviewRecords, releaseReviews, defects]);
 
   const reviewStats = useMemo(() => {
     const total = filteredRecords.length;
@@ -1233,10 +1223,38 @@ function App() {
     setFormValues(prev => ({ ...prev, [field]: value }));
   };
 
+  const findRecordWorkflowConfig = (record: ReviewRecord): WorkflowConfig | undefined => {
+    return findWorkflowConfig(workflowConfigs, record.aircraftType, record.ataChapter, record.checkArea);
+  };
+
   const handleAddRecord = async () => {
-    if (!formValues.aircraftType || !formValues.ataChapter || !formValues.checkArea) {
-      alert("请填写机型、ATA章节和检查区域");
+    const config = currentWorkflowConfig;
+    const formData = formValues as unknown as Record<string, string>;
+    const baseValidation = validateRequiredFields(getVisibleFields(config), formData);
+    if (!baseValidation.valid) {
+      alert(`请填写必填字段：${baseValidation.missingFields.join("、")}`);
       return;
+    }
+
+    const initialStatus = getInitialStatus(config);
+    if (config && formValues.status !== initialStatus) {
+      const transition = getAvailableStatusTransitions(config, initialStatus, activeRole)
+        .find(item => item.to === formValues.status);
+      if (!transition) {
+        alert(`${activeRole}不能将新记录直接流转为${formValues.status}`);
+        return;
+      }
+      const transitionRequiredFields = (transition.requiredFields ?? [])
+        .map(fieldKey => config.fields.find(field => field.key === fieldKey))
+        .filter((field): field is FieldConfig => Boolean(field));
+      const transitionValidation = validateRequiredFields(
+        transitionRequiredFields.map(field => ({ ...field, required: true })),
+        formData
+      );
+      if (!transitionValidation.valid) {
+        alert(`状态流转到${formValues.status}前请填写：${transitionValidation.missingFields.join("、")}`);
+        return;
+      }
     }
 
     const newRecord: ReviewRecord = {
@@ -1253,7 +1271,7 @@ function App() {
     try {
       await addRecord(newRecord);
       setReviewRecords(prev => [...prev, newRecord]);
-      setFormValues(emptyForm);
+      setFormValues({ ...emptyForm, status: getInitialStatus(config) });
     } catch (error) {
       console.error("Failed to add record:", error);
     }
@@ -1771,11 +1789,11 @@ function App() {
             >
               全部
             </button>
-            {globalFilters.map(filter => (
+            {activeFilters.map(filter => (
               <button
                 key={filter.key}
-                className={activeFilter === filter.label ? "chip-active" : ""}
-                onClick={() => setActiveFilter(filter.label)}
+                className={activeFilter === filter.key ? "chip-active" : ""}
+                onClick={() => setActiveFilter(filter.key)}
               >
                 {filter.label}
               </button>
@@ -1805,7 +1823,7 @@ function App() {
               } else if (field.key === "checkArea") {
                 options = availableCheckAreas;
               } else if (field.key === "status" && currentWorkflowConfig) {
-                options = currentWorkflowConfig.statuses;
+                options = allowedStatusOptions;
               }
               const fieldWithOptions = { ...field, options };
               return (
@@ -2201,26 +2219,37 @@ function App() {
                 </div>
               ) : (
                 filteredRecords.map((record, index) => (
-                  <article key={record.id} className="record-card">
-                    <div className={`record-index ${record.status.includes("缺陷") ? "record-index-defect" : ""}`}>
-                      {String(index + 1).padStart(2, "0")}
-                    </div>
-                    <div className="record-content">
-                      <h3>{record.aircraftType}</h3>
-                      <p>{[record.ataChapter, record.checkArea, record.status, record.defectDesc].filter(Boolean).join(" · ")}</p>
-                    </div>
-                    {record.status.includes("缺陷") && (
-                      <div className="record-actions">
-                        <button
-                          className="generate-defect-btn"
-                          onClick={() => handleGenerateDefectFromRecord(record)}
-                          disabled={!!Object.values(defects).find(d => d.sourceRecordId === record.id)}
-                        >
-                          {Object.values(defects).find(d => d.sourceRecordId === record.id) ? "已加入清单" : "生成缺陷"}
-                        </button>
-                      </div>
-                    )}
-                  </article>
+                  (() => {
+                    const recordConfig = findRecordWorkflowConfig(record);
+                    const displayFields = getRecordDisplayFields(recordConfig, record)
+                      .filter(field => field.label !== "机型");
+                    const hasDefect = canCreateDefect(recordConfig, activeRole, record.status);
+                    const defectExists = !!Object.values(defects).find(d => d.sourceRecordId === record.id);
+                    return (
+                      <article key={record.id} className="record-card">
+                        <div className={`record-index ${hasDefect ? "record-index-defect" : ""}`}>
+                          {String(index + 1).padStart(2, "0")}
+                        </div>
+                        <div className="record-content">
+                          <h3>{record.aircraftType}</h3>
+                          <p>
+                            {displayFields.map(field => `${field.label}：${field.value}`).join(" · ")}
+                          </p>
+                        </div>
+                        {hasDefect && (
+                          <div className="record-actions">
+                            <button
+                              className="generate-defect-btn"
+                              onClick={() => handleGenerateDefectFromRecord(record)}
+                              disabled={defectExists}
+                            >
+                              {defectExists ? "已加入清单" : "生成缺陷"}
+                            </button>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })()
                 ))
               )}
           </div>
