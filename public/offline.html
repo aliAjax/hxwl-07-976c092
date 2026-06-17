@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>离线模式 | 航空维修检查清单</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      }
+      .offline-container {
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 48px 36px;
+        max-width: 480px;
+        width: 100%;
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(245, 158, 11, 0.2);
+        border: 1px solid #f59e0b;
+      }
+      .offline-icon {
+        font-size: 72px;
+        margin-bottom: 16px;
+        animation: pulse 2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.08); }
+      }
+      h1 {
+        color: #92400e;
+        font-size: 28px;
+        margin-bottom: 8px;
+      }
+      .subtitle {
+        color: #a16207;
+        font-size: 16px;
+        line-height: 1.6;
+        margin-bottom: 24px;
+      }
+      .features {
+        background: #fefce8;
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 24px;
+        text-align: left;
+      }
+      .features h3 {
+        color: #854d0e;
+        font-size: 14px;
+        margin: 0 0 8px;
+        font-weight: 600;
+      }
+      .features ul {
+        margin: 0;
+        padding-left: 20px;
+        color: #713f12;
+        font-size: 14px;
+        line-height: 1.8;
+      }
+      .status-badge {
+        display: inline-block;
+        padding: 8px 20px;
+        background: #dc2626;
+        color: #ffffff;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 14px;
+        margin-bottom: 20px;
+        letter-spacing: 1px;
+        animation: blink 1.5s ease-in-out infinite;
+      }
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
+      .btn-retry {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 28px;
+        background: #1d4ed8;
+        color: #ffffff;
+        border: none;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-family: inherit;
+      }
+      .btn-retry:hover {
+        background: #1e40af;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3);
+      }
+      .btn-retry:active {
+        transform: translateY(0);
+      }
+      .footer {
+        margin-top: 24px;
+        padding-top: 16px;
+        border-top: 1px solid #fef3c7;
+        color: #92400e;
+        font-size: 12px;
+      }
+      .app-title {
+        color: #713f12;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="offline-container">
+      <div class="offline-icon">📡</div>
+      <div class="status-badge">离线模式</div>
+      <h1>当前处于离线状态</h1>
+      <p class="subtitle">请检查网络连接，恢复后数据将自动同步。</p>
+      <div class="features">
+        <h3>✓ 离线可用功能：</h3>
+        <ul>
+          <li>查看已缓存的检查记录和模板</li>
+          <li>新增、编辑检查记录</li>
+          <li>处理缺陷项目</li>
+          <li>录入复核和讲评意见</li>
+          <li>数据自动保存到本地</li>
+        </ul>
+      </div>
+      <button class="btn-retry" onclick="window.location.reload()">
+        <span>🔄</span>
+        <span>尝试重新连接</span>
+      </button>
+      <div class="footer">
+        <span class="app-title">航空维修检查清单</span> · 离线缓存版本
+      </div>
+    </div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if (event.data && event.data.type === 'ONLINE_STATUS') {
+            if (event.data.online) {
+              window.location.reload();
+            }
+          }
+        });
+      }
+      window.addEventListener('online', () => {
+        setTimeout(() => window.location.reload(), 1000);
+      });
+    </script>
+  </body>
+</html>

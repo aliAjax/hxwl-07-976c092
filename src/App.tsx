@@ -29,16 +29,24 @@ import {
   NetworkStatus,
   SyncStatus,
   SyncOperation,
+  SWStatus,
   initNetworkMonitoring,
   subscribeNetworkStatus,
   subscribeSyncQueue,
   subscribeSyncStatus,
+  subscribeSWStatus,
   attemptAutoSync,
   getPendingSyncCount,
   getLastSyncTime,
   isStaticCacheAvailable,
   getOperationLabel,
-  clearSyncedOperations
+  clearSyncedOperations,
+  getSWStatusText,
+  getCacheInfo,
+  clearCache,
+  precacheAssets,
+  updateServiceWorker,
+  activateWaitingWorker
 } from "./offline";
 
 type UserRole = "维修工程师" | "放行人员" | "培训教员";
@@ -598,6 +606,8 @@ function App() {
   const [showSyncPanel, setShowSyncPanel] = useState(false);
   const [showOnlineRestoredToast, setShowOnlineRestoredToast] = useState(false);
   const [cacheReady, setCacheReady] = useState(false);
+  const [swStatus, setSwStatus] = useState<SWStatus | null>(null);
+  const [showCachePanel, setShowCachePanel] = useState(false);
   const prevNetworkRef = useRef<NetworkStatus>(navigator.onLine ? "online" : "offline");
   const toastTimerRef = useRef<number | null>(null);
 
@@ -637,12 +647,17 @@ function App() {
     const unsubscribeSyncStatus = subscribeSyncStatus((status) => {
       setSyncStatus(status);
     });
+    const unsubscribeSWStatus = subscribeSWStatus((status) => {
+      setSwStatus(status);
+    });
+    getCacheInfo();
 
     return () => {
       cleanupNetwork();
       unsubscribeNetwork();
       unsubscribeSyncQueue();
       unsubscribeSyncStatus();
+      unsubscribeSWStatus();
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
   }, []);
@@ -664,6 +679,48 @@ function App() {
     } catch (error) {
       console.error("Failed to refresh data:", error);
     }
+  };
+
+  const handleClearCache = async () => {
+    const confirmed = window.confirm(
+      "确定要清除所有离线缓存吗？\n\n清除后需要重新联网才能缓存资源。"
+    );
+    if (!confirmed) return;
+    const success = await clearCache();
+    if (success) {
+      setCacheReady(false);
+      alert("离线缓存已清除，请刷新页面以重新加载。");
+    } else {
+      alert("清除缓存失败，请稍后重试。");
+    }
+  };
+
+  const handlePrecache = async () => {
+    const success = await precacheAssets();
+    if (success) {
+      alert("资源预缓存完成！");
+    } else {
+      alert("预缓存可能未完全完成，请检查网络连接。");
+    }
+    await getCacheInfo();
+  };
+
+  const handleUpdateSW = async () => {
+    const success = await updateServiceWorker();
+    if (success) {
+      alert("Service Worker 已检查更新，如有新版本将自动下载。");
+    } else {
+      alert("检查更新失败，请稍后重试。");
+    }
+  };
+
+  const handleActivateWaiting = () => {
+    activateWaitingWorker();
+    window.location.reload();
+  };
+
+  const handleRefreshCacheInfo = async () => {
+    await getCacheInfo();
   };
 
   const filteredRecords = useMemo(() => {
@@ -1334,14 +1391,23 @@ function App() {
               <span className="sync-status-text">
                 网络状态：<strong className={networkStatus === "online" ? "text-online" : "text-offline"}>在线</strong>
               </span>
-              {cacheReady && (
-                <span className="sync-status-divider">·</span>
+              {swStatus && (
+                <>
+                  <span className="sync-status-divider">·</span>
+                  <span className={`sw-status-badge sw-status-${swStatus.registrationStatus}`}>
+                    <span className="sw-status-dot"></span>
+                    离线缓存：{getSWStatusText(swStatus.registrationStatus)}
+                  </span>
+                </>
               )}
-              {cacheReady && (
-                <span className="sync-cache-status">
-                  <span className="cache-check-icon">✓</span>
-                  核心资源已缓存
-                </span>
+              {swStatus?.isCached && (
+                <>
+                  <span className="sync-status-divider">·</span>
+                  <span className="sync-cache-status">
+                    <span className="cache-check-icon">✓</span>
+                    {swStatus.cacheInfo?.totalAssets || 0} 个资源已缓存
+                  </span>
+                </>
               )}
               {lastSync && (
                 <>
@@ -1351,6 +1417,21 @@ function App() {
               )}
             </div>
             <div className="sync-status-right">
+              {swStatus && (
+                <button
+                  className="cache-manage-btn"
+                  onClick={() => setShowCachePanel(!showCachePanel)}
+                  title="缓存管理"
+                >
+                  <span>🛠️</span>
+                  <span>缓存管理</span>
+                </button>
+              )}
+              {swStatus?.waitingWorker && (
+                <button className="primary-action sw-update-btn" onClick={handleActivateWaiting}>
+                  🚀 立即更新
+                </button>
+              )}
               {pendingCount > 0 && (
                 <button
                   className={`sync-pending-button ${syncStatus === "syncing" ? "syncing" : ""}`}
@@ -1386,6 +1467,79 @@ function App() {
               )}
             </div>
           </div>
+
+          {showCachePanel && swStatus && (
+            <div className="sync-panel cache-panel">
+              <div className="sync-panel-header">
+                <h3>离线缓存管理</h3>
+                <span className="sync-panel-count">
+                  已缓存 {swStatus.cacheInfo?.totalAssets || 0} 个资源
+                </span>
+              </div>
+              <div className="cache-panel-content">
+                <div className="cache-info-grid">
+                  <div className="cache-info-item">
+                    <div className="cache-info-label">Service Worker 状态</div>
+                    <div className="cache-info-value">
+                      <span className={`sw-status-badge sw-status-${swStatus.registrationStatus}`}>
+                        {getSWStatusText(swStatus.registrationStatus)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="cache-info-item">
+                    <div className="cache-info-label">缓存版本</div>
+                    <div className="cache-info-value">{swStatus.cacheInfo?.version || "—"}</div>
+                  </div>
+                  <div className="cache-info-item">
+                    <div className="cache-info-label">缓存存储空间</div>
+                    <div className="cache-info-value">
+                      {swStatus.cacheInfo?.totalAssets || 0} 个文件
+                    </div>
+                  </div>
+                  <div className="cache-info-item">
+                    <div className="cache-info-label">缓存名称</div>
+                    <div className="cache-info-value">
+                      {swStatus.cacheInfo?.cacheNames.join(", ") || "—"}
+                    </div>
+                  </div>
+                </div>
+                <div className="cache-panel-actions">
+                  <button className="secondary-action cache-action-btn" onClick={handlePrecache}>
+                    <span>📥</span>
+                    <span>预缓存资源</span>
+                  </button>
+                  <button className="secondary-action cache-action-btn" onClick={handleUpdateSW}>
+                    <span>🔄</span>
+                    <span>检查更新</span>
+                  </button>
+                  <button className="secondary-action cache-action-btn" onClick={handleRefreshCacheInfo}>
+                    <span>🔁</span>
+                    <span>刷新状态</span>
+                  </button>
+                  <button className="danger-action cache-action-btn" onClick={handleClearCache}>
+                    <span>🗑️</span>
+                    <span>清除缓存</span>
+                  </button>
+                </div>
+                <div className="cache-panel-desc">
+                  <p>💡 <strong>离线模式说明：</strong></p>
+                  <ul>
+                    <li>首次访问后，核心静态资源会自动缓存，断网时仍可访问</li>
+                    <li>离线时录入的检查记录会暂存本地，网络恢复后自动同步</li>
+                    <li>清除缓存后需要重新联网才能再次缓存资源</li>
+                  </ul>
+                </div>
+              </div>
+              <div className="sync-panel-footer">
+                <button
+                  className="sync-panel-close"
+                  onClick={() => setShowCachePanel(false)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          )}
 
           {showSyncPanel && pendingCount > 0 && (
             <div className="sync-panel">
