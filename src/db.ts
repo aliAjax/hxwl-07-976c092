@@ -15,6 +15,7 @@ export interface ReviewRecord {
   aircraftType: string;
   ataChapter: string;
   checkArea: string;
+  checkItem?: string;
   status: string;
   defectDesc: string;
   handling: string;
@@ -27,12 +28,25 @@ export interface ReviewNote {
 
 export type ReviewState = Record<string, string>;
 
+export type ReleaseReviewStatus = "pending" | "passed" | "rejected";
+
+export interface ReleaseReviewResult {
+  recordId: string;
+  status: ReleaseReviewStatus;
+  opinion: string;
+  reviewer: string;
+  reviewedAt: number;
+}
+
+export type ReleaseReviewState = Record<string, ReleaseReviewResult>;
+
 const DB_NAME = "hxwl-07-aviation-maintenance";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORE_TEMPLATES = "templates";
 const STORE_RECORDS = "records";
 const STORE_REVIEW_NOTES = "reviewNotes";
+const STORE_RELEASE_REVIEWS = "releaseReviews";
 
 const SEED_KEY = "hxwl-07-seeded";
 
@@ -132,6 +146,12 @@ function openDB(): Promise<IDBDatabase> {
 
       if (!db.objectStoreNames.contains(STORE_REVIEW_NOTES)) {
         const noteStore = db.createObjectStore(STORE_REVIEW_NOTES, { keyPath: "recordId" });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_RELEASE_REVIEWS)) {
+        const releaseStore = db.createObjectStore(STORE_RELEASE_REVIEWS, { keyPath: "recordId" });
+        releaseStore.createIndex("status", "status", { unique: false });
+        releaseStore.createIndex("reviewer", "reviewer", { unique: false });
       }
     };
   });
@@ -288,16 +308,44 @@ export async function saveReviewNote(recordId: string, note: string): Promise<vo
   });
 }
 
+export async function getAllReleaseReviews(): Promise<ReleaseReviewState> {
+  return withDB(STORE_RELEASE_REVIEWS, "readonly", (store) => {
+    return new Promise<ReleaseReviewState>((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const reviews: ReleaseReviewState = {};
+        (request.result as ReleaseReviewResult[]).forEach(r => {
+          reviews[r.recordId] = r;
+        });
+        resolve(reviews);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function saveReleaseReview(review: ReleaseReviewResult): Promise<void> {
+  return withDB(STORE_RELEASE_REVIEWS, "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.put(review);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
 export async function initializeDatabase(): Promise<{
   templates: CheckTemplate[];
   records: ReviewRecord[];
   reviewNotes: ReviewState;
+  releaseReviews: ReleaseReviewState;
 }> {
   await seedDemoData();
-  const [templates, records, reviewNotes] = await Promise.all([
+  const [templates, records, reviewNotes, releaseReviews] = await Promise.all([
     getAllTemplates(),
     getAllRecords(),
-    getAllReviewNotes()
+    getAllReviewNotes(),
+    getAllReleaseReviews()
   ]);
-  return { templates, records, reviewNotes };
+  return { templates, records, reviewNotes, releaseReviews };
 }

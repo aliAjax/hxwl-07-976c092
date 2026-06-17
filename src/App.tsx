@@ -4,6 +4,8 @@ import {
   CheckTemplate,
   ReviewRecord,
   ReviewState,
+  ReleaseReviewResult,
+  ReleaseReviewState,
   initializeDatabase,
   addTemplate,
   updateTemplate,
@@ -12,7 +14,9 @@ import {
   saveReviewNote,
   getAllTemplates,
   getAllRecords,
-  getAllReviewNotes
+  getAllReviewNotes,
+  getAllReleaseReviews,
+  saveReleaseReview
 } from "./db";
 
 type UserRole = "维修工程师" | "放行人员" | "培训教员";
@@ -126,11 +130,174 @@ function MetricCard({ label, value, index }: { label: string; value: string; ind
   );
 }
 
+function ReleaseReviewCard({
+  record,
+  index,
+  review,
+  opinion,
+  onOpinionChange,
+  onReview,
+  recordType
+}: {
+  record: ReviewRecord;
+  index: number;
+  review?: ReleaseReviewResult;
+  opinion: string;
+  onOpinionChange: (id: string, value: string) => void;
+  onReview: (id: string, status: "passed" | "rejected") => void;
+  recordType: "normal" | "pending" | "defect";
+}) {
+  const isReviewed = !!review;
+  const isPassed = review?.status === "passed";
+  const isRejected = review?.status === "rejected";
+  const isDefectType = recordType === "defect";
+
+  const getReviewBadge = () => {
+    if (isDefectType && isReviewed) {
+      return <span className="review-badge review-badge-defect-reviewed">已复核·缺陷</span>;
+    }
+    if (isPassed) return <span className="review-badge review-badge-pass">已通过</span>;
+    if (isRejected) return <span className="review-badge review-badge-reject">已驳回</span>;
+    return <span className="review-badge review-badge-pending">待复核</span>;
+  };
+
+  const formatTime = (timestamp: number) => {
+    return new Date(timestamp).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  };
+
+  const handlePassClick = () => {
+    if (isDefectType) {
+      const confirmed = window.confirm(
+        "注意：该记录为缺陷项，确认通过后仍将标记为缺陷，不计入已完成。\n\n是否确认通过复核？"
+      );
+      if (confirmed) {
+        onReview(record.id, "passed");
+      }
+    } else {
+      onReview(record.id, "passed");
+    }
+  };
+
+  const handleRejectClick = () => {
+    if (isDefectType) {
+      const confirmed = window.confirm(
+        "确认驳回该缺陷项？驳回后需重新提交复核。"
+      );
+      if (confirmed) {
+        onReview(record.id, "rejected");
+      }
+    } else {
+      onReview(record.id, "rejected");
+    }
+  };
+
+  return (
+    <article className={`release-card ${isReviewed ? "reviewed" : ""} ${isPassed ? "passed" : ""} ${isRejected ? "rejected" : ""} ${isDefectType ? "defect-record" : ""}`}>
+      <div className="release-card-header">
+        <div className={`release-card-index ${isDefectType ? "defect-index" : ""}`}>
+          {String(index + 1).padStart(2, "0")}
+        </div>
+        <div className="release-card-title">
+          <div className="release-card-top">
+            <h3>{record.aircraftType}</h3>
+            <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+              {record.status}
+            </span>
+            {getReviewBadge()}
+            {isDefectType && !isReviewed && (
+              <span className="defect-warning-tag">⚠️ 需谨慎处理</span>
+            )}
+          </div>
+          <div className="release-card-meta">
+            <span className="meta-tag">{record.ataChapter}</span>
+            <span className="meta-tag meta-tag-muted">{record.checkArea}</span>
+            {record.checkItem && <span className="meta-tag meta-tag-muted">{record.checkItem}</span>}
+          </div>
+        </div>
+      </div>
+
+      <div className="release-card-body">
+        <div className="defect-section">
+          <div className="section-label">
+            {isDefectType ? "缺陷详情" : "检查说明"}
+          </div>
+          <div className={`defect-content ${isDefectType ? "defect-highlight" : ""}`}>
+            {record.defectDesc ? record.defectDesc : "无缺陷描述"}
+          </div>
+        </div>
+
+        {record.handling && (
+          <div className="handling-section">
+            <div className="section-label">处理意见</div>
+            <div className="handling-content">
+              {record.handling}
+            </div>
+          </div>
+        )}
+
+        {isReviewed ? (
+          <div className="review-result-section">
+            <div className="section-label">
+              复核意见
+              <span className="reviewer-info">
+                {review?.reviewer} · {formatTime(review!.reviewedAt)}
+              </span>
+            </div>
+            <div className={`review-opinion-display ${isDefectType ? "defect-opinion" : ""}`}>
+              {review?.opinion || "无复核意见"}
+            </div>
+            {isDefectType && (
+              <div className="defect-status-note">
+                <span className="defect-status-icon">⚠️</span>
+                <span>缺陷项不计入已完成，需持续跟踪处理</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="review-action-section">
+            <div className="section-label">
+              复核意见
+              {isDefectType && <span className="defect-required-tag">必填</span>}
+            </div>
+            <textarea
+              className={`opinion-textarea ${isDefectType ? "defect-textarea" : ""}`}
+              placeholder={isDefectType ? "请填写缺陷处置意见，是否同意放行，需说明理由..." : "请填写复核意见..."}
+              rows={isDefectType ? 3 : 2}
+              value={opinion}
+              onChange={e => onOpinionChange(record.id, e.target.value)}
+            />
+            <div className="review-actions-row">
+              <button
+                className="reject-btn"
+                onClick={handleRejectClick}
+              >
+                {isDefectType ? "驳回·需返工" : "驳回"}
+              </button>
+              <button
+                className={`pass-btn ${isDefectType ? "defect-pass-btn" : ""}`}
+                onClick={handlePassClick}
+              >
+                {isDefectType ? "通过·带缺陷放行" : "通过"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
 function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [templates, setTemplates] = useState<CheckTemplate[]>([]);
   const [reviewRecords, setReviewRecords] = useState<ReviewRecord[]>([]);
   const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
+  const [releaseReviews, setReleaseReviews] = useState<ReleaseReviewState>({});
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
@@ -156,6 +323,7 @@ function App() {
         setTemplates(data.templates);
         setReviewRecords(data.records);
         setReviewNotes(data.reviewNotes);
+        setReleaseReviews(data.releaseReviews);
       } catch (error) {
         console.error("Failed to initialize database:", error);
       } finally {
@@ -167,14 +335,16 @@ function App() {
 
   const refreshData = async () => {
     try {
-      const [t, r, n] = await Promise.all([
+      const [t, r, n, rr] = await Promise.all([
         getAllTemplates(),
         getAllRecords(),
-        getAllReviewNotes()
+        getAllReviewNotes(),
+        getAllReleaseReviews()
       ]);
       setTemplates(t);
       setReviewRecords(r);
       setReviewNotes(n);
+      setReleaseReviews(rr);
     } catch (error) {
       console.error("Failed to refresh data:", error);
     }
@@ -195,16 +365,33 @@ function App() {
       return String(reviewRecords.filter(r => r.status.includes("缺陷")).length);
     }
     if (metric === "待复核") {
-      return String(reviewRecords.filter(r => r.status.includes("待复核")).length);
+      const pendingCount = reviewRecords.filter(r => {
+        const review = releaseReviews[r.id];
+        if (r.status.includes("缺陷")) {
+          return !review;
+        }
+        if (r.status.includes("待复核")) {
+          return !review;
+        }
+        if (r.status.includes("正常") || r.status.includes("完成")) {
+          return !review;
+        }
+        return !review;
+      }).length;
+      return String(pendingCount);
     }
     if (metric === "ATA章节") {
       const chapters = new Set(reviewRecords.map(r => r.ataChapter));
       return String(chapters.size);
     }
     if (metric === "完成率") {
-      const normal = reviewRecords.filter(r => r.status.includes("正常") || r.status.includes("完成")).length;
+      const completedCount = reviewRecords.filter(r => {
+        if (r.status.includes("缺陷")) return false;
+        const review = releaseReviews[r.id];
+        return review && review.status === "passed";
+      }).length;
       const total = reviewRecords.length;
-      return total > 0 ? `${Math.round((normal / total) * 100)}%` : "0%";
+      return total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "0%";
     }
     return String(base + index * 3);
   });
@@ -233,6 +420,118 @@ function App() {
     }
   };
 
+  const [releaseOpinions, setReleaseOpinions] = useState<Record<string, string>>({});
+
+  const handleReleaseOpinionChange = (recordId: string, value: string) => {
+    setReleaseOpinions(prev => ({ ...prev, [recordId]: value }));
+  };
+
+  const handleReleaseReview = async (recordId: string, status: "passed" | "rejected") => {
+    const record = reviewRecords.find(r => r.id === recordId);
+    const opinion = releaseOpinions[recordId] || "";
+    
+    if (record?.status.includes("缺陷") && opinion.trim() === "") {
+      alert("缺陷项必须填写复核意见！请说明处置理由。");
+      return;
+    }
+
+    const review: ReleaseReviewResult = {
+      recordId,
+      status,
+      opinion,
+      reviewer: "放行人员",
+      reviewedAt: Date.now()
+    };
+    try {
+      await saveReleaseReview(review);
+      setReleaseReviews(prev => ({ ...prev, [recordId]: review }));
+      setReleaseOpinions(prev => {
+        const next = { ...prev };
+        delete next[recordId];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to save release review:", error);
+    }
+  };
+
+  const releaseStats = useMemo(() => {
+    let normal = 0;
+    let pending = 0;
+    let defect = 0;
+    let reviewed = 0;
+    let passed = 0;
+    let rejected = 0;
+    let defectReviewed = 0;
+
+    filteredRecords.forEach(r => {
+      const review = releaseReviews[r.id];
+      const isDefect = r.status.includes("缺陷");
+      const isNormal = r.status.includes("正常") || r.status.includes("完成");
+      const isPendingReview = r.status.includes("待复核");
+
+      if (isDefect) {
+        defect++;
+        if (review) {
+          reviewed++;
+          defectReviewed++;
+        }
+      } else if (isNormal) {
+        normal++;
+        if (review) {
+          reviewed++;
+          if (review.status === "passed") {
+            passed++;
+          } else if (review.status === "rejected") {
+            rejected++;
+          }
+        }
+      } else if (isPendingReview) {
+        pending++;
+        if (review) {
+          reviewed++;
+          if (review.status === "passed") {
+            passed++;
+          } else if (review.status === "rejected") {
+            rejected++;
+          }
+        }
+      }
+    });
+
+    const totalPending = filteredRecords.length - passed;
+
+    return {
+      total: filteredRecords.length,
+      normal,
+      pending,
+      defect,
+      reviewed,
+      passed,
+      rejected,
+      defectReviewed,
+      totalPending
+    };
+  }, [filteredRecords, releaseReviews]);
+
+  const groupedRecords = useMemo(() => {
+    const normal: ReviewRecord[] = [];
+    const pending: ReviewRecord[] = [];
+    const defect: ReviewRecord[] = [];
+
+    filteredRecords.forEach(r => {
+      if (r.status.includes("缺陷")) {
+        defect.push(r);
+      } else if (r.status.includes("待复核")) {
+        pending.push(r);
+      } else {
+        normal.push(r);
+      }
+    });
+
+    return { normal, pending, defect };
+  }, [filteredRecords]);
+
   const handleFormChange = (field: keyof FormValues, value: string) => {
     setFormValues(prev => ({ ...prev, [field]: value }));
   };
@@ -248,6 +547,7 @@ function App() {
       aircraftType: formValues.aircraftType,
       ataChapter: formValues.ataChapter,
       checkArea: formValues.checkArea,
+      checkItem: formValues.checkItem,
       status: formValues.status,
       defectDesc: formValues.defectDesc,
       handling: formValues.handling
@@ -598,7 +898,134 @@ function App() {
         </div>
       </section>
 
-      {activeRole === "培训教员" ? (
+      {activeRole === "放行人员" ? (
+        <section className="release-panel">
+          <div className="section-heading">
+            <div>
+              <p>放行前复核</p>
+              <h2>放行复核工作台</h2>
+            </div>
+            <div className="review-actions">
+              <button className="review-summary-btn">
+                复核进度 {releaseStats.reviewed}/{releaseStats.total}
+                {releaseStats.defectReviewed > 0 && (
+                  <span className="defect-review-count"> · 缺陷 {releaseStats.defectReviewed}</span>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div className="release-metrics">
+            <div className="release-metric">
+              <span>记录总数</span>
+              <strong>{releaseStats.total}</strong>
+            </div>
+            <div className="release-metric release-metric-ok">
+              <span>正常</span>
+              <strong>{releaseStats.normal}</strong>
+            </div>
+            <div className="release-metric release-metric-watch">
+              <span>待复核</span>
+              <strong>{releaseStats.pending}</strong>
+            </div>
+            <div className="release-metric release-metric-danger">
+              <span>缺陷项</span>
+              <strong>{releaseStats.defect}</strong>
+            </div>
+            <div className="release-metric release-metric-primary">
+              <span>已通过</span>
+              <strong>{releaseStats.passed}</strong>
+            </div>
+            <div className="release-metric release-metric-rejected">
+              <span>已驳回</span>
+              <strong>{releaseStats.rejected}</strong>
+            </div>
+          </div>
+
+          <div className="release-groups">
+            <div className="release-group">
+              <div className="release-group-header release-group-ok">
+                <h3>正常</h3>
+                <span className="group-count">{groupedRecords.normal.length}</span>
+              </div>
+              <div className="release-group-list">
+                {groupedRecords.normal.length === 0 ? (
+                  <div className="empty-state small">
+                    <p>暂无正常记录</p>
+                  </div>
+                ) : (
+                  groupedRecords.normal.map((record, index) => (
+                    <ReleaseReviewCard
+                      key={record.id}
+                      record={record}
+                      index={index}
+                      review={releaseReviews[record.id]}
+                      opinion={releaseOpinions[record.id] || ""}
+                      onOpinionChange={handleReleaseOpinionChange}
+                      onReview={handleReleaseReview}
+                      recordType="normal"
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="release-group">
+              <div className="release-group-header release-group-watch">
+                <h3>待复核</h3>
+                <span className="group-count">{groupedRecords.pending.length}</span>
+              </div>
+              <div className="release-group-list">
+                {groupedRecords.pending.length === 0 ? (
+                  <div className="empty-state small">
+                    <p>暂无待复核记录</p>
+                  </div>
+                ) : (
+                  groupedRecords.pending.map((record, index) => (
+                    <ReleaseReviewCard
+                      key={record.id}
+                      record={record}
+                      index={index}
+                      review={releaseReviews[record.id]}
+                      opinion={releaseOpinions[record.id] || ""}
+                      onOpinionChange={handleReleaseOpinionChange}
+                      onReview={handleReleaseReview}
+                      recordType="pending"
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="release-group">
+              <div className="release-group-header release-group-danger">
+                <h3>缺陷</h3>
+                <span className="group-count">{groupedRecords.defect.length}</span>
+              </div>
+              <div className="release-group-list">
+                {groupedRecords.defect.length === 0 ? (
+                  <div className="empty-state small">
+                    <p>暂无缺陷记录</p>
+                  </div>
+                ) : (
+                  groupedRecords.defect.map((record, index) => (
+                    <ReleaseReviewCard
+                      key={record.id}
+                      record={record}
+                      index={index}
+                      review={releaseReviews[record.id]}
+                      opinion={releaseOpinions[record.id] || ""}
+                      onOpinionChange={handleReleaseOpinionChange}
+                      onReview={handleReleaseReview}
+                      recordType="defect"
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : activeRole === "培训教员" ? (
         <section className="review-panel">
           <div className="section-heading">
             <div>
