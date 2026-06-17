@@ -503,15 +503,20 @@ function DefectCard({
                 onChange={e => onFormChange(defect.id, "completedNote", e.target.value)}
               />
             </label>
+            <label className="full-width">
+              <span>退回原因</span>
+              <textarea
+                className="defect-textarea"
+                placeholder="请填写退回复核原因..."
+                rows={2}
+                value={formValues.rejectedReason || ""}
+                onChange={e => onFormChange(defect.id, "rejectedReason", e.target.value)}
+              />
+            </label>
             <div className="defect-actions-row">
               <button
                 className="defect-reject-btn"
-                onClick={() => {
-                  const reason = prompt("请填写退回复核原因：");
-                  if (reason) {
-                    onReject(defect.id, reason);
-                  }
-                }}
+                onClick={() => onReject(defect.id)}
               >
                 退回复核
               </button>
