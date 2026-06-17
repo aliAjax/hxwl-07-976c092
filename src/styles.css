@@ -2496,6 +2496,11 @@ input {
   animation: swStatusPulse 0.8s ease-in-out infinite;
 }
 
+.sw-status-installed .sw-status-dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.15);
+}
+
 .sw-status-waiting .sw-status-dot {
   background: #f59e0b;
 }

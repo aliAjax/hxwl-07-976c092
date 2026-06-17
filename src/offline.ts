@@ -2,7 +2,7 @@ export type NetworkStatus = "online" | "offline";
 
 export type SyncStatus = "idle" | "syncing" | "synced" | "error";
 
-export type SWRegistrationStatus = "unsupported" | "registering" | "registered" | "installing" | "waiting" | "updating" | "error";
+export type SWRegistrationStatus = "unsupported" | "registering" | "registered" | "installing" | "installed" | "waiting" | "updating" | "error";
 
 export type OperationType =
   | "addRecord"
@@ -595,6 +595,7 @@ export function getSWStatusText(status: SWRegistrationStatus): string {
     registering: "注册中",
     registered: "已启用",
     installing: "安装中",
+    installed: "已安装",
     waiting: "等待更新",
     updating: "更新中",
     error: "注册失败"

@@ -25,6 +25,7 @@ self.addEventListener("install", (event) => {
         return Promise.all(
           PRECACHE_URLS.map(url => 
             cache.add(url).catch(() => console.warn(`[SW] Skipped: ${url}`))
+          )
         );
       });
     }).then(() => {
