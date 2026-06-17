@@ -40,13 +40,37 @@ export interface ReleaseReviewResult {
 
 export type ReleaseReviewState = Record<string, ReleaseReviewResult>;
 
+export type DefectStatus = "pending" | "processing" | "completed" | "rejected";
+
+export interface DefectItem {
+  id: string;
+  sourceRecordId: string;
+  aircraftType: string;
+  ataChapter: string;
+  checkArea: string;
+  checkItem?: string;
+  defectDesc: string;
+  handlingOpinion: string;
+  assignedSigner: string;
+  status: DefectStatus;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  rejectedAt?: number;
+  rejectedReason?: string;
+  completedNote?: string;
+}
+
+export type DefectState = Record<string, DefectItem>;
+
 const DB_NAME = "hxwl-07-aviation-maintenance";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORE_TEMPLATES = "templates";
 const STORE_RECORDS = "records";
 const STORE_REVIEW_NOTES = "reviewNotes";
 const STORE_RELEASE_REVIEWS = "releaseReviews";
+const STORE_DEFECTS = "defects";
 
 const SEED_KEY = "hxwl-07-seeded";
 
@@ -152,6 +176,16 @@ function openDB(): Promise<IDBDatabase> {
         const releaseStore = db.createObjectStore(STORE_RELEASE_REVIEWS, { keyPath: "recordId" });
         releaseStore.createIndex("status", "status", { unique: false });
         releaseStore.createIndex("reviewer", "reviewer", { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_DEFECTS)) {
+        const defectStore = db.createObjectStore(STORE_DEFECTS, { keyPath: "id" });
+        defectStore.createIndex("sourceRecordId", "sourceRecordId", { unique: false });
+        defectStore.createIndex("status", "status", { unique: false });
+        defectStore.createIndex("assignedSigner", "assignedSigner", { unique: false });
+        defectStore.createIndex("aircraftType", "aircraftType", { unique: false });
+        defectStore.createIndex("ataChapter", "ataChapter", { unique: false });
+        defectStore.createIndex("createdAt", "createdAt", { unique: false });
       }
     };
   });
@@ -334,18 +368,80 @@ export async function saveReleaseReview(review: ReleaseReviewResult): Promise<vo
   });
 }
 
+export async function getAllDefects(): Promise<DefectState> {
+  return withDB(STORE_DEFECTS, "readonly", (store) => {
+    return new Promise<DefectState>((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const defects: DefectState = {};
+        (request.result as DefectItem[]).forEach(d => {
+          defects[d.id] = d;
+        });
+        resolve(defects);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function addDefect(defect: DefectItem): Promise<void> {
+  return withDB(STORE_DEFECTS, "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.put(defect);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function updateDefect(defect: DefectItem): Promise<void> {
+  return addDefect(defect);
+}
+
+export async function deleteDefect(id: string): Promise<void> {
+  return withDB(STORE_DEFECTS, "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.delete(id);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function createDefectFromRecord(record: ReviewRecord): Promise<DefectItem> {
+  const now = Date.now();
+  const defect: DefectItem = {
+    id: `defect-${now}`,
+    sourceRecordId: record.id,
+    aircraftType: record.aircraftType,
+    ataChapter: record.ataChapter,
+    checkArea: record.checkArea,
+    checkItem: record.checkItem,
+    defectDesc: record.defectDesc,
+    handlingOpinion: "",
+    assignedSigner: "",
+    status: "pending",
+    createdAt: now,
+    updatedAt: now
+  };
+  await addDefect(defect);
+  return defect;
+}
+
 export async function initializeDatabase(): Promise<{
   templates: CheckTemplate[];
   records: ReviewRecord[];
   reviewNotes: ReviewState;
   releaseReviews: ReleaseReviewState;
+  defects: DefectState;
 }> {
   await seedDemoData();
-  const [templates, records, reviewNotes, releaseReviews] = await Promise.all([
+  const [templates, records, reviewNotes, releaseReviews, defects] = await Promise.all([
     getAllTemplates(),
     getAllRecords(),
     getAllReviewNotes(),
-    getAllReleaseReviews()
+    getAllReleaseReviews(),
+    getAllDefects()
   ]);
-  return { templates, records, reviewNotes, releaseReviews };
+  return { templates, records, reviewNotes, releaseReviews, defects };
 }

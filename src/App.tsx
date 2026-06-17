@@ -6,6 +6,9 @@ import {
   ReviewState,
   ReleaseReviewResult,
   ReleaseReviewState,
+  DefectItem,
+  DefectState,
+  DefectStatus,
   initializeDatabase,
   addTemplate,
   updateTemplate,
@@ -16,7 +19,11 @@ import {
   getAllRecords,
   getAllReviewNotes,
   getAllReleaseReviews,
-  saveReleaseReview
+  saveReleaseReview,
+  getAllDefects,
+  updateDefect,
+  createDefectFromRecord,
+  deleteDefect
 } from "./db";
 
 type UserRole = "维修工程师" | "放行人员" | "培训教员";
@@ -42,6 +49,7 @@ const project = {
     "完成率",
     "缺陷项",
     "待复核",
+    "待处理缺陷",
     "ATA章节"
   ],
   "filters": [
@@ -292,12 +300,256 @@ function ReleaseReviewCard({
   );
 }
 
+function getDefectStatusBadgeClass(status: DefectStatus): string {
+  switch (status) {
+    case "pending":
+      return "defect-status-badge-pending";
+    case "processing":
+      return "defect-status-badge-processing";
+    case "completed":
+      return "defect-status-badge-completed";
+    case "rejected":
+      return "defect-status-badge-rejected";
+    default:
+      return "defect-status-badge-pending";
+  }
+}
+
+function getDefectStatusText(status: DefectStatus): string {
+  switch (status) {
+    case "pending":
+      return "待处理";
+    case "processing":
+      return "处理中";
+    case "completed":
+      return "已完成";
+    case "rejected":
+      return "已退回";
+    default:
+      return status;
+  }
+}
+
+interface DefectCardProps {
+  defect: DefectItem;
+  index: number;
+  formValues: { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string };
+  sourceRecord?: ReviewRecord;
+  onFormChange: (defectId: string, field: string, value: string) => void;
+  onStartProcessing: (defectId: string) => void;
+  onComplete: (defectId: string) => void;
+  onReject: (defectId: string) => void;
+  onReopen: (defectId: string) => void;
+  onDelete: (defectId: string) => void;
+  isHistory?: boolean;
+}
+
+function DefectCard({
+  defect,
+  index,
+  formValues,
+  sourceRecord,
+  onFormChange,
+  onStartProcessing,
+  onComplete,
+  onReject,
+  onReopen,
+  onDelete,
+  isHistory = false
+}: DefectCardProps) {
+  const formatTime = (timestamp: number) => {
+    return new Date(timestamp).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  };
+
+  const isPending = defect.status === "pending";
+  const isProcessing = defect.status === "processing";
+  const isCompleted = defect.status === "completed";
+  const isRejected = defect.status === "rejected";
+
+  return (
+    <article className={`defect-card defect-card-${defect.status} ${isHistory ? "defect-card-history" : ""}`}>
+      <div className="defect-card-header">
+        <div className={`defect-card-index ${isPending ? "defect-index-pending" : isProcessing ? "defect-index-processing" : isCompleted ? "defect-index-completed" : "defect-index-rejected"}`}>
+          {String(index + 1).padStart(2, "0")}
+        </div>
+        <div className="defect-card-title">
+          <div className="defect-card-top">
+            <h3>{defect.aircraftType}</h3>
+            <span className={`defect-status-badge ${getDefectStatusBadgeClass(defect.status)}`}>
+              {getDefectStatusText(defect.status)}
+            </span>
+            {sourceRecord && (
+              <span className="defect-source-tag">源自检查记录</span>
+            )}
+          </div>
+          <div className="defect-card-meta">
+            <span className="meta-tag">{defect.ataChapter}</span>
+            <span className="meta-tag meta-tag-muted">{defect.checkArea}</span>
+            {defect.checkItem && <span className="meta-tag meta-tag-muted">{defect.checkItem}</span>}
+          </div>
+          <div className="defect-card-time">
+            创建时间：{formatTime(defect.createdAt)}
+          </div>
+        </div>
+        {!isHistory && (
+          <button className="defect-delete-btn" onClick={() => onDelete(defect.id)} title="删除">
+            ×
+          </button>
+        )}
+      </div>
+
+      <div className="defect-card-body">
+        <div className="defect-section">
+          <div className="section-label">缺陷描述</div>
+          <div className="defect-content defect-highlight">
+            {defect.defectDesc}
+          </div>
+        </div>
+
+        {defect.handlingOpinion && (
+          <div className="handling-section">
+            <div className="section-label">处理意见</div>
+            <div className="handling-content">
+              {defect.handlingOpinion}
+            </div>
+          </div>
+        )}
+
+        {defect.assignedSigner && (
+          <div className="signer-section">
+            <div className="section-label">指定签署人</div>
+            <div className="signer-content">
+              {defect.assignedSigner}
+            </div>
+          </div>
+        )}
+
+        {isCompleted && (
+          <div className="defect-result-section">
+            <div className="section-label">
+              完成说明
+              <span className="reviewer-info">
+                {formatTime(defect.completedAt!)}
+              </span>
+            </div>
+            <div className="defect-result-content">
+              {defect.completedNote || "无补充说明"}
+            </div>
+          </div>
+        )}
+
+        {isRejected && (
+          <div className="defect-result-section">
+            <div className="section-label">
+              退回原因
+              <span className="reviewer-info">
+                {formatTime(defect.rejectedAt!)}
+              </span>
+            </div>
+            <div className="defect-reject-content">
+              {defect.rejectedReason}
+            </div>
+          </div>
+        )}
+
+        {isPending && !isHistory && (
+          <div className="defect-action-section">
+            <div className="defect-form-grid">
+              <label className="full-width">
+                <span>处理意见 <span className="required-mark">*</span></span>
+                <textarea
+                  className="defect-textarea"
+                  placeholder="请填写具体的维修处理意见，包括维修方案、预计工时、所需器材等..."
+                  rows={2}
+                  value={formValues.handlingOpinion || defect.handlingOpinion}
+                  onChange={e => onFormChange(defect.id, "handlingOpinion", e.target.value)}
+                />
+              </label>
+              <label className="full-width">
+                <span>指定签署人 <span className="required-mark">*</span></span>
+                <input
+                  className="defect-input"
+                  placeholder="请指定负责该缺陷处理的签署人"
+                  value={formValues.assignedSigner || defect.assignedSigner}
+                  onChange={e => onFormChange(defect.id, "assignedSigner", e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="defect-actions-row">
+              <button
+                className="defect-start-btn"
+                onClick={() => onStartProcessing(defect.id)}
+              >
+                开始处理
+              </button>
+            </div>
+          </div>
+        )}
+
+        {isProcessing && !isHistory && (
+          <div className="defect-action-section">
+            <label className="full-width">
+              <span>完成说明</span>
+              <textarea
+                className="defect-textarea"
+                placeholder="请填写维修完成情况说明（可选）..."
+                rows={2}
+                value={formValues.completedNote || ""}
+                onChange={e => onFormChange(defect.id, "completedNote", e.target.value)}
+              />
+            </label>
+            <div className="defect-actions-row">
+              <button
+                className="defect-reject-btn"
+                onClick={() => {
+                  const reason = prompt("请填写退回复核原因：");
+                  if (reason) {
+                    onFormChange(defect.id, "rejectedReason", reason);
+                    setTimeout(() => onReject(defect.id), 50);
+                  }
+                }}
+              >
+                退回复核
+              </button>
+              <button
+                className="defect-complete-btn"
+                onClick={() => onComplete(defect.id)}
+              >
+                标记完成
+              </button>
+            </div>
+          </div>
+        )}
+
+        {isHistory && (
+          <div className="defect-history-actions">
+            <button
+              className="defect-reopen-btn"
+              onClick={() => onReopen(defect.id)}
+            >
+              重新打开
+            </button>
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
 function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [templates, setTemplates] = useState<CheckTemplate[]>([]);
   const [reviewRecords, setReviewRecords] = useState<ReviewRecord[]>([]);
   const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
   const [releaseReviews, setReleaseReviews] = useState<ReleaseReviewState>({});
+  const [defects, setDefects] = useState<DefectState>({});
+  const [activeDefectTab, setActiveDefectTab] = useState<"pending" | "history">("pending");
+  const [defectFormValues, setDefectFormValues] = useState<Record<string, { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string }>>({});
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
@@ -330,6 +582,7 @@ function App() {
         setReviewRecords(data.records);
         setReviewNotes(data.reviewNotes);
         setReleaseReviews(data.releaseReviews);
+        setDefects(data.defects);
       } catch (error) {
         console.error("Failed to initialize database:", error);
       } finally {
@@ -341,16 +594,18 @@ function App() {
 
   const refreshData = async () => {
     try {
-      const [t, r, n, rr] = await Promise.all([
+      const [t, r, n, rr, d] = await Promise.all([
         getAllTemplates(),
         getAllRecords(),
         getAllReviewNotes(),
-        getAllReleaseReviews()
+        getAllReleaseReviews(),
+        getAllDefects()
       ]);
       setTemplates(t);
       setReviewRecords(r);
       setReviewNotes(n);
       setReleaseReviews(rr);
+      setDefects(d);
     } catch (error) {
       console.error("Failed to refresh data:", error);
     }
@@ -366,7 +621,7 @@ function App() {
   }, [reviewRecords, activeFilter]);
 
   const values = project.metrics.map((metric: string, index: number) => {
-    const base = [reviewRecords.length, 0, 0, 0][index % 4];
+    const base = [reviewRecords.length, 0, 0, 0, 0][index % 5];
     if (metric === "缺陷项") {
       return String(reviewRecords.filter(r => r.status.includes("缺陷")).length);
     }
@@ -385,6 +640,12 @@ function App() {
         return !review;
       }).length;
       return String(pendingCount);
+    }
+    if (metric === "待处理缺陷") {
+      const pendingDefects = Object.values(defects).filter(d =>
+        d.status === "pending" || d.status === "processing"
+      ).length;
+      return String(pendingDefects);
     }
     if (metric === "ATA章节") {
       const chapters = new Set(reviewRecords.map(r => r.ataChapter));
@@ -459,6 +720,201 @@ function App() {
     } catch (error) {
       console.error("Failed to save release review:", error);
     }
+  };
+
+  const handleGenerateDefectFromRecord = async (record: ReviewRecord) => {
+    const existingDefect = Object.values(defects).find(d => d.sourceRecordId === record.id);
+    if (existingDefect) {
+      alert("该缺陷项已存在于待处理清单中！");
+      return;
+    }
+    try {
+      const defect = await createDefectFromRecord(record);
+      setDefects(prev => ({ ...prev, [defect.id]: defect }));
+      alert("缺陷项已添加到待处理清单！");
+    } catch (error) {
+      console.error("Failed to generate defect from record:", error);
+      alert("生成缺陷项失败，请重试。");
+    }
+  };
+
+  const handleDefectFormChange = (defectId: string, field: string, value: string) => {
+    setDefectFormValues(prev => ({
+      ...prev,
+      [defectId]: {
+        handlingOpinion: prev[defectId]?.handlingOpinion || "",
+        assignedSigner: prev[defectId]?.assignedSigner || "",
+        rejectedReason: prev[defectId]?.rejectedReason || "",
+        completedNote: prev[defectId]?.completedNote || "",
+        ...prev[defectId],
+        [field]: value
+      }
+    }));
+  };
+
+  const handleStartProcessing = async (defectId: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const formVals = defectFormValues[defectId] || {};
+    const handlingOpinion = formVals.handlingOpinion || defect.handlingOpinion;
+    const assignedSigner = formVals.assignedSigner || defect.assignedSigner;
+
+    if (!handlingOpinion.trim()) {
+      alert("请填写处理意见！");
+      return;
+    }
+    if (!assignedSigner.trim()) {
+      alert("请指定签署人！");
+      return;
+    }
+
+    const updatedDefect: DefectItem = {
+      ...defect,
+      handlingOpinion,
+      assignedSigner,
+      status: "processing",
+      updatedAt: Date.now()
+    };
+
+    try {
+      await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+    } catch (error) {
+      console.error("Failed to start processing defect:", error);
+    }
+  };
+
+  const handleCompleteDefect = async (defectId: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const formVals = defectFormValues[defectId] || {};
+    const completedNote = formVals.completedNote || "";
+
+    const confirmed = window.confirm("确认标记该缺陷为已完成？完成后将移至历史记录。");
+    if (!confirmed) return;
+
+    const now = Date.now();
+    const updatedDefect: DefectItem = {
+      ...defect,
+      status: "completed",
+      completedNote,
+      completedAt: now,
+      updatedAt: now
+    };
+
+    try {
+      await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      setDefectFormValues(prev => {
+        const next = { ...prev };
+        delete next[defectId];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to complete defect:", error);
+    }
+  };
+
+  const handleRejectDefect = async (defectId: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const formVals = defectFormValues[defectId] || {};
+    const rejectedReason = formVals.rejectedReason || "";
+
+    if (!rejectedReason.trim()) {
+      alert("请填写退回复核原因！");
+      return;
+    }
+
+    const confirmed = window.confirm("确认退回该缺陷？退回后需要重新处理。");
+    if (!confirmed) return;
+
+    const now = Date.now();
+    const updatedDefect: DefectItem = {
+      ...defect,
+      status: "rejected",
+      rejectedReason,
+      rejectedAt: now,
+      updatedAt: now
+    };
+
+    try {
+      await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      setDefectFormValues(prev => {
+        const next = { ...prev };
+        delete next[defectId];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to reject defect:", error);
+    }
+  };
+
+  const handleReopenDefect = async (defectId: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const confirmed = window.confirm("确认重新打开该缺陷？将重新进入待处理状态。");
+    if (!confirmed) return;
+
+    const updatedDefect: DefectItem = {
+      ...defect,
+      status: "pending",
+      handlingOpinion: "",
+      assignedSigner: "",
+      completedNote: undefined,
+      completedAt: undefined,
+      rejectedReason: undefined,
+      rejectedAt: undefined,
+      updatedAt: Date.now()
+    };
+
+    try {
+      await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+    } catch (error) {
+      console.error("Failed to reopen defect:", error);
+    }
+  };
+
+  const handleDeleteDefect = async (defectId: string) => {
+    const confirmed = window.confirm("确认删除该缺陷记录？此操作不可恢复。");
+    if (!confirmed) return;
+
+    try {
+      await deleteDefect(defectId);
+      setDefects(prev => {
+        const next = { ...prev };
+        delete next[defectId];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to delete defect:", error);
+    }
+  };
+
+  const defectStats = useMemo(() => {
+    const allDefects = Object.values(defects);
+    const pending = allDefects.filter(d => d.status === "pending").length;
+    const processing = allDefects.filter(d => d.status === "processing").length;
+    const completed = allDefects.filter(d => d.status === "completed").length;
+    const rejected = allDefects.filter(d => d.status === "rejected").length;
+    return { total: allDefects.length, pending, processing, completed, rejected };
+  }, [defects]);
+
+  const groupedDefects = useMemo(() => {
+    const allDefects = Object.values(defects);
+    const pending = allDefects.filter(d => d.status === "pending" || d.status === "processing");
+    const history = allDefects.filter(d => d.status === "completed" || d.status === "rejected");
+    return { pending, history };
+  }, [defects]);
+
+  const getDefectSourceRecord = (sourceRecordId: string): ReviewRecord | undefined => {
+    return reviewRecords.find(r => r.id === sourceRecordId);
   };
 
   const releaseStats = useMemo(() => {
@@ -1217,32 +1673,145 @@ function App() {
           </div>
         </section>
       ) : (
-        <section className="records panel">
-          <div className="section-heading">
-            <div>
-              <p>检查记录</p>
-              <h2>近期记录</h2>
+        <>
+          <section className="defect-panel">
+            <div className="section-heading">
+              <div>
+                <p>维修缺陷闭环</p>
+                <h2>缺陷处理工作台</h2>
+              </div>
+              <div className="defect-tabs">
+                <button
+                  className={activeDefectTab === "pending" ? "defect-tab-active" : ""}
+                  onClick={() => setActiveDefectTab("pending")}
+                >
+                  待处理 ({groupedDefects.pending.length})
+                </button>
+                <button
+                  className={activeDefectTab === "history" ? "defect-tab-active" : ""}
+                  onClick={() => setActiveDefectTab("history")}
+                >
+                  历史记录 ({groupedDefects.history.length})
+                </button>
+              </div>
             </div>
-            <button onClick={openExportPreview}>导出摘要</button>
-          </div>
-          <div className="record-list">
-            {filteredRecords.length === 0 ? (
-              <div className="empty-state">
-                <p>暂无记录，点击"新增记录"创建第一条检查记录</p>
+
+            <div className="defect-metrics">
+              <div className="defect-metric">
+                <span>缺陷总数</span>
+                <strong>{defectStats.total}</strong>
+              </div>
+              <div className="defect-metric defect-metric-pending">
+                <span>待处理</span>
+                <strong>{defectStats.pending}</strong>
+              </div>
+              <div className="defect-metric defect-metric-processing">
+                <span>处理中</span>
+                <strong>{defectStats.processing}</strong>
+              </div>
+              <div className="defect-metric defect-metric-completed">
+                <span>已完成</span>
+                <strong>{defectStats.completed}</strong>
+              </div>
+              <div className="defect-metric defect-metric-rejected">
+                <span>已退回</span>
+                <strong>{defectStats.rejected}</strong>
+              </div>
+            </div>
+
+            {activeDefectTab === "pending" ? (
+              <div className="defect-list">
+                {groupedDefects.pending.length === 0 ? (
+                  <div className="empty-state">
+                    <p>暂无待处理缺陷。请在下方"近期记录"中点击缺陷项的"生成缺陷"按钮，将缺陷加入待处理清单。</p>
+                  </div>
+                ) : (
+                  groupedDefects.pending.map((defect, index) => (
+                    <DefectCard
+                      key={defect.id}
+                      defect={defect}
+                      index={index}
+                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                      sourceRecord={getDefectSourceRecord(defect.sourceRecordId)}
+                      onFormChange={handleDefectFormChange}
+                      onStartProcessing={handleStartProcessing}
+                      onComplete={handleCompleteDefect}
+                      onReject={handleRejectDefect}
+                      onReopen={handleReopenDefect}
+                      onDelete={handleDeleteDefect}
+                      isHistory={false}
+                    />
+                  ))
+                )}
               </div>
             ) : (
-              filteredRecords.map((record, index) => (
-                <article key={record.id} className="record-card">
-                  <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-                  <div>
-                    <h3>{record.aircraftType}</h3>
-                    <p>{[record.ataChapter, record.checkArea, record.status, record.defectDesc].filter(Boolean).join(" · ")}</p>
+              <div className="defect-list">
+                {groupedDefects.history.length === 0 ? (
+                  <div className="empty-state">
+                    <p>暂无历史缺陷记录。</p>
                   </div>
-                </article>
-              ))
+                ) : (
+                  groupedDefects.history.map((defect, index) => (
+                    <DefectCard
+                      key={defect.id}
+                      defect={defect}
+                      index={index}
+                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                      sourceRecord={getDefectSourceRecord(defect.sourceRecordId)}
+                      onFormChange={handleDefectFormChange}
+                      onStartProcessing={handleStartProcessing}
+                      onComplete={handleCompleteDefect}
+                      onReject={handleRejectDefect}
+                      onReopen={handleReopenDefect}
+                      onDelete={handleDeleteDefect}
+                      isHistory={true}
+                    />
+                  ))
+                )}
+              </div>
             )}
+          </section>
+
+          <section className="records panel">
+            <div className="section-heading">
+              <div>
+                <p>检查记录</p>
+                <h2>近期记录</h2>
+              </div>
+              <button onClick={openExportPreview}>导出摘要</button>
+            </div>
+            <div className="record-list">
+              {filteredRecords.length === 0 ? (
+                <div className="empty-state">
+                  <p>暂无记录，点击"新增记录"创建第一条检查记录</p>
+                </div>
+              ) : (
+                filteredRecords.map((record, index) => (
+                  <article key={record.id} className="record-card">
+                    <div className={`record-index ${record.status.includes("缺陷") ? "record-index-defect" : ""}`}>
+                      {String(index + 1).padStart(2, "0")}
+                    </div>
+                    <div className="record-content">
+                      <h3>{record.aircraftType}</h3>
+                      <p>{[record.ataChapter, record.checkArea, record.status, record.defectDesc].filter(Boolean).join(" · ")}</p>
+                    </div>
+                    {record.status.includes("缺陷") && (
+                      <div className="record-actions">
+                        <button
+                          className="generate-defect-btn"
+                          onClick={() => handleGenerateDefectFromRecord(record)}
+                          disabled={!!Object.values(defects).find(d => d.sourceRecordId === record.id)}
+                        >
+                          {Object.values(defects).find(d => d.sourceRecordId === record.id) ? "已加入清单" : "生成缺陷"}
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                ))
+              )}
           </div>
         </section>
+        </>
       )}
 
       {isModalOpen && (
