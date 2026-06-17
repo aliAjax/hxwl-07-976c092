@@ -35,7 +35,17 @@ import {
   getAllAircraftTypes,
   getAtaChaptersByAircraft,
   getCheckAreasByAircraftAndAta,
-  canRoleEditField
+  canRoleEditField,
+  validateRequiredFields,
+  calculateMetricValue,
+  getMatrixCellStatus,
+  groupRecordsByStatus,
+  getRecordDisplayFields,
+  canCreateDefect,
+  getStatusCategory,
+  getStatusList,
+  getInitialStatus,
+  StatusCategory
 } from "./workflow";
 import {
   workflowConfigs,
@@ -788,8 +798,8 @@ function App() {
     return config.fields;
   };
 
-  const calculateMetricValue = (metricKey: string): string => {
-    switch (metricKey) {
+  const computeMetricValue = (metric: { key: string; label: string; colorIndex: number; type?: string; source?: string; filter?: any }): string => {
+    switch (metric.key) {
       case "completionRate": {
         const completedCount = reviewRecords.filter(r => {
           if (r.status.includes("缺陷")) return false;
@@ -833,10 +843,24 @@ function App() {
   }, [reviewRecords, activeFilter]);
 
   const metricValues = useMemo(() => {
-    return globalMetrics.map(metric => ({
-      ...metric,
-      value: calculateMetricValue(metric.key)
-    }));
+    return globalMetrics.map(metric => {
+      if (metric.key === "completionRate") {
+        const completedCount = reviewRecords.filter(r => {
+          if (r.status.includes("缺陷")) return false;
+          const review = releaseReviews[r.id];
+          return review && review.status === "passed";
+        }).length;
+        const total = reviewRecords.length;
+        return {
+          ...metric,
+          value: total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "0%"
+        };
+      }
+      return {
+        ...metric,
+        value: calculateMetricValue(metric, reviewRecords, defects, releaseReviews)
+      };
+    });
   }, [globalMetrics, reviewRecords, releaseReviews, defects]);
 
   const reviewStats = useMemo(() => {
@@ -1188,11 +1212,10 @@ function App() {
     return { aircraftTypes, ataChapters, matrix };
   }, [reviewRecords, filteredRecords]);
 
-  const getCellStatus = (records: ReviewRecord[]): "normal" | "pending" | "defect" | "not-started" => {
+  const getCellStatus = (records: ReviewRecord[]): StatusCategory | "not-started" => {
     if (records.length === 0) return "not-started";
-    if (records.some(r => r.status.includes("缺陷"))) return "defect";
-    if (records.some(r => r.status.includes("待复核"))) return "pending";
-    return "normal";
+    const allStatuses = workflowConfigs.flatMap(c => c.statuses);
+    return getMatrixCellStatus(records, allStatuses);
   };
 
   const handleMatrixCellClick = (aircraftType: string, ataChapter: string) => {

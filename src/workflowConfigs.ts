@@ -641,11 +641,46 @@ export const workflowConfigs: WorkflowConfig[] = [
 
 export function getGlobalMetrics() {
   return [
-    { key: "completionRate", label: "完成率", colorIndex: 0 },
-    { key: "defectCount", label: "缺陷项", colorIndex: 2 },
-    { key: "pendingReview", label: "待复核", colorIndex: 1 },
-    { key: "pendingDefects", label: "待处理缺陷", colorIndex: 1 },
-    { key: "ataChapters", label: "ATA章节", colorIndex: 0 }
+    {
+      key: "completionRate",
+      label: "完成率",
+      type: "percentage" as const,
+      source: "records" as const,
+      filter: { status: ["正常", "完成", "通过"] },
+      colorIndex: 0
+    },
+    {
+      key: "defectCount",
+      label: "缺陷项",
+      type: "count" as const,
+      source: "records" as const,
+      filter: { status: ["缺陷"] },
+      colorIndex: 2
+    },
+    {
+      key: "pendingReview",
+      label: "待复核",
+      type: "count" as const,
+      source: "records" as const,
+      filter: { status: ["待复核"] },
+      colorIndex: 1
+    },
+    {
+      key: "pendingDefects",
+      label: "待处理缺陷",
+      type: "count" as const,
+      source: "defects" as const,
+      filter: { status: ["pending", "processing"] },
+      colorIndex: 1
+    },
+    {
+      key: "ataChapters",
+      label: "ATA章节",
+      type: "distinctCount" as const,
+      source: "records" as const,
+      distinctField: "ataChapter",
+      colorIndex: 0
+    }
   ];
 }
 

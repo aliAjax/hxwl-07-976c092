@@ -32,13 +32,14 @@ export interface StatusTransition {
 export interface MetricConfig {
   key: string;
   label: string;
-  type: "count" | "percentage";
+  type: "count" | "percentage" | "distinctCount";
   source: "records" | "defects" | "reviews";
   filter?: {
     status?: string[];
     field?: string;
     value?: string;
   };
+  distinctField?: string;
   colorIndex: number;
 }
 
@@ -196,4 +197,180 @@ export function getDefectStatusText(status: string): string {
     default:
       return status;
   }
+}
+
+export type StatusCategory = "normal" | "pending" | "defect";
+
+export function getStatusCategory(status: string): StatusCategory {
+  const s = status.toLowerCase();
+  if (s.includes("缺陷") || s.includes("驳回") || s.includes("退回")) return "defect";
+  if (s.includes("待复核") || s.includes("待") || s.includes("处理中")) return "pending";
+  return "normal";
+}
+
+export function validateRequiredFields(
+  fields: FieldConfig[],
+  formData: Record<string, string>
+): { valid: boolean; missingFields: string[] } {
+  const missingFields: string[] = [];
+  fields.forEach(field => {
+    if (field.required && (!formData[field.key] || formData[field.key].trim() === "")) {
+      missingFields.push(field.label);
+    }
+  });
+  return { valid: missingFields.length === 0, missingFields };
+}
+
+export function calculateMetricValue(
+  metric: MetricConfig,
+  records: any[],
+  defects: any[],
+  reviews: Record<string, any>
+): string {
+  const { type, source, filter } = metric;
+
+  let dataSource: any[];
+  switch (source) {
+    case "records":
+      dataSource = records;
+      break;
+    case "defects":
+      dataSource = Object.values(defects);
+      break;
+    case "reviews":
+      dataSource = Object.values(reviews);
+      break;
+    default:
+      dataSource = [];
+  }
+
+  let filteredData = dataSource;
+  if (filter) {
+    if (filter.status && filter.status.length > 0) {
+      if (source === "records") {
+        filteredData = filteredData.filter((item: any) =>
+          filter.status!.some(s => item.status.includes(s))
+        );
+      } else {
+        filteredData = filteredData.filter((item: any) =>
+          filter.status!.includes(item.status)
+        );
+      }
+    }
+    if (filter.field && filter.value) {
+      filteredData = filteredData.filter(
+        (item: any) => item[filter.field!] === filter.value
+      );
+    }
+  }
+
+  if (type === "count") {
+    return String(filteredData.length);
+  }
+
+  if (type === "distinctCount" && metric.distinctField) {
+    const distinctValues = new Set(filteredData.map(item => item[metric.distinctField!]));
+    return String(distinctValues.size);
+  }
+
+  if (type === "percentage") {
+    const total = dataSource.length;
+    if (total === 0) return "0%";
+    return `${Math.round((filteredData.length / total) * 100)}%`;
+  }
+
+  return "0";
+}
+
+export function getMatrixCellStatus(
+  records: any[],
+  statuses: string[]
+): StatusCategory | "not-started" {
+  if (records.length === 0) return "not-started";
+
+  for (const status of statuses) {
+    const category = getStatusCategory(status);
+    if (category === "defect" && records.some(r => r.status === status)) {
+      return "defect";
+    }
+  }
+  for (const status of statuses) {
+    const category = getStatusCategory(status);
+    if (category === "pending" && records.some(r => r.status === status)) {
+      return "pending";
+    }
+  }
+  return "normal";
+}
+
+export function groupRecordsByStatus(
+  records: any[],
+  statuses: string[]
+): Record<StatusCategory, any[]> {
+  const groups: Record<StatusCategory, any[]> = {
+    normal: [],
+    pending: [],
+    defect: []
+  };
+
+  records.forEach(record => {
+    const category = getStatusCategory(record.status);
+    groups[category].push(record);
+  });
+
+  return groups;
+}
+
+export function getRecordDisplayFields(
+  config: WorkflowConfig | undefined,
+  record: any
+): { label: string; value: string }[] {
+  const fields: { label: string; value: string }[] = [];
+
+  if (config) {
+    config.fields.forEach(field => {
+      const value = record[field.key];
+      if (value && value.trim() !== "") {
+        fields.push({ label: field.label, value });
+      }
+    });
+  } else {
+    const defaultFields = [
+      { key: "ataChapter", label: "ATA章节" },
+      { key: "checkArea", label: "检查区域" },
+      { key: "status", label: "状态" },
+      { key: "defectDesc", label: "缺陷描述" }
+    ];
+    defaultFields.forEach(field => {
+      const value = record[field.key];
+      if (value && value.trim() !== "") {
+        fields.push({ label: field.label, value });
+      }
+    });
+  }
+
+  return fields;
+}
+
+export function canCreateDefect(
+  config: WorkflowConfig | undefined,
+  role: UserRole,
+  recordStatus: string
+): boolean {
+  if (!config) {
+    return role === "维修工程师" && recordStatus.includes("缺陷");
+  }
+  const permissions = config.rolePermissions[role];
+  if (!permissions?.canCreateDefect) return false;
+  return getStatusCategory(recordStatus) === "defect";
+}
+
+export function getStatusList(config: WorkflowConfig | undefined): string[] {
+  if (!config) return ["待复核", "正常", "缺陷"];
+  return config.statuses;
+}
+
+export function getInitialStatus(config: WorkflowConfig | undefined): string {
+  if (!config) return "待复核";
+  return config.initialStatus;
 }
