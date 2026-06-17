@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import "./styles.css";
 import {
   CheckTemplate,
@@ -25,6 +25,21 @@ import {
   createDefectFromRecord,
   deleteDefect
 } from "./db";
+import {
+  NetworkStatus,
+  SyncStatus,
+  SyncOperation,
+  initNetworkMonitoring,
+  subscribeNetworkStatus,
+  subscribeSyncQueue,
+  subscribeSyncStatus,
+  attemptAutoSync,
+  getPendingSyncCount,
+  getLastSyncTime,
+  isStaticCacheAvailable,
+  getOperationLabel,
+  clearSyncedOperations
+} from "./offline";
 
 type UserRole = "维修工程师" | "放行人员" | "培训教员";
 
@@ -577,6 +592,14 @@ function App() {
     ataChapter: string;
     records: ReviewRecord[];
   } | null>(null);
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(navigator.onLine ? "online" : "offline");
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+  const [syncQueue, setSyncQueue] = useState<SyncOperation[]>([]);
+  const [showSyncPanel, setShowSyncPanel] = useState(false);
+  const [showOnlineRestoredToast, setShowOnlineRestoredToast] = useState(false);
+  const [cacheReady, setCacheReady] = useState(false);
+  const prevNetworkRef = useRef<NetworkStatus>(navigator.onLine ? "online" : "offline");
+  const toastTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -587,6 +610,7 @@ function App() {
         setReviewNotes(data.reviewNotes);
         setReleaseReviews(data.releaseReviews);
         setDefects(data.defects);
+        setCacheReady(isStaticCacheAvailable());
       } catch (error) {
         console.error("Failed to initialize database:", error);
       } finally {
@@ -594,6 +618,33 @@ function App() {
       }
     };
     loadData();
+
+    const cleanupNetwork = initNetworkMonitoring();
+    const unsubscribeNetwork = subscribeNetworkStatus((status) => {
+      const prev = prevNetworkRef.current;
+      prevNetworkRef.current = status;
+      setNetworkStatus(status);
+      if (prev === "offline" && status === "online") {
+        setShowOnlineRestoredToast(true);
+        if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = window.setTimeout(() => setShowOnlineRestoredToast(false), 4000);
+        attemptAutoSync();
+      }
+    });
+    const unsubscribeSyncQueue = subscribeSyncQueue((queue) => {
+      setSyncQueue(queue);
+    });
+    const unsubscribeSyncStatus = subscribeSyncStatus((status) => {
+      setSyncStatus(status);
+    });
+
+    return () => {
+      cleanupNetwork();
+      unsubscribeNetwork();
+      unsubscribeSyncQueue();
+      unsubscribeSyncStatus();
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    };
   }, []);
 
   const refreshData = async () => {
@@ -1222,8 +1273,164 @@ function App() {
     );
   }
 
+  const pendingCount = getPendingSyncCount();
+  const lastSync = getLastSyncTime();
+
+  const handleManualSync = async () => {
+    if (networkStatus === "offline") {
+      alert("当前处于离线状态，请恢复网络后再尝试同步。");
+      return;
+    }
+    await attemptAutoSync();
+  };
+
+  const formatLastSync = (timestamp: number | null) => {
+    if (!timestamp) return "从未同步";
+    return new Date(timestamp).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  };
+
   return (
     <main className="app-shell">
+      {networkStatus === "offline" && (
+        <div className="offline-banner offline-banner-active">
+          <div className="offline-banner-content">
+            <span className="offline-icon">📡</span>
+            <div className="offline-banner-text">
+              <strong>当前处于离线模式</strong>
+              <span>检查记录将暂存本地，网络恢复后自动同步。{cacheReady ? "核心资源已缓存，可正常使用。" : ""}</span>
+            </div>
+            <span className="offline-badge">离线</span>
+          </div>
+        </div>
+      )}
+
+      {showOnlineRestoredToast && networkStatus === "online" && (
+        <div className="online-restored-toast">
+          <div className="toast-content">
+            <span className="toast-icon">✅</span>
+            <div>
+              <strong>网络已恢复连接</strong>
+              {pendingCount > 0 ? (
+                <span>检测到 {pendingCount} 条待同步记录，正在自动同步...</span>
+              ) : (
+                <span>所有数据已保持最新</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {networkStatus === "online" && (
+        <div className="sync-status-bar">
+          <div className="sync-status-row">
+            <div className="sync-status-left">
+              <span className={`sync-status-dot sync-status-dot-${networkStatus}`}></span>
+              <span className="sync-status-text">
+                网络状态：<strong className={networkStatus === "online" ? "text-online" : "text-offline"}>在线</strong>
+              </span>
+              {cacheReady && (
+                <span className="sync-status-divider">·</span>
+              )}
+              {cacheReady && (
+                <span className="sync-cache-status">
+                  <span className="cache-check-icon">✓</span>
+                  核心资源已缓存
+                </span>
+              )}
+              {lastSync && (
+                <>
+                  <span className="sync-status-divider">·</span>
+                  <span className="sync-last-time">上次同步：{formatLastSync(lastSync)}</span>
+                </>
+              )}
+            </div>
+            <div className="sync-status-right">
+              {pendingCount > 0 && (
+                <button
+                  className={`sync-pending-button ${syncStatus === "syncing" ? "syncing" : ""}`}
+                  onClick={() => setShowSyncPanel(!showSyncPanel)}
+                >
+                  {syncStatus === "syncing" ? (
+                    <>
+                      <span className="sync-spinner"></span>
+                      <span>同步中...</span>
+                    </>
+                  ) : syncStatus === "synced" ? (
+                    <>
+                      <span className="sync-check">✓</span>
+                      <span>同步完成</span>
+                    </>
+                  ) : syncStatus === "error" ? (
+                    <>
+                      <span className="sync-error">⚠</span>
+                      <span>同步异常</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="sync-pending-count">{pendingCount}</span>
+                      <span>条待同步</span>
+                    </>
+                  )}
+                </button>
+              )}
+              {pendingCount > 0 && networkStatus === "online" && (
+                <button className="primary-action sync-now-btn" onClick={handleManualSync}>
+                  {syncStatus === "syncing" ? "同步中..." : "立即同步"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {showSyncPanel && pendingCount > 0 && (
+            <div className="sync-panel">
+              <div className="sync-panel-header">
+                <h3>待同步操作队列</h3>
+                <span className="sync-panel-count">共 {pendingCount} 条</span>
+              </div>
+              <div className="sync-panel-list">
+                {syncQueue.filter(op => !op.synced).map(op => (
+                  <div key={op.id} className="sync-panel-item">
+                    <div className="sync-item-icon">
+                      {op.type.includes("add") || op.type.includes("create") ? "+" : op.type.includes("delete") ? "×" : "↻"}
+                    </div>
+                    <div className="sync-item-info">
+                      <div className="sync-item-type">{getOperationLabel(op.type)}</div>
+                      <div className="sync-item-time">
+                        入队时间：{new Date(op.createdAt).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </div>
+                    </div>
+                    <div className="sync-item-status">
+                      {op.error ? (
+                        <span className="sync-item-error" title={op.error}>⚠ 失败</span>
+                      ) : (
+                        <span className="sync-item-waiting">等待中</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="sync-panel-footer">
+                <button
+                  className="sync-panel-close"
+                  onClick={() => {
+                    clearSyncedOperations();
+                    setShowSyncPanel(false);
+                  }}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <section className="hero">
         <div>
           <p className="eyebrow">{project.id} · port {project.port}</p>

@@ -1,3 +1,8 @@
+import {
+  enqueueOperation,
+  cacheStaticAssets
+} from "./offline";
+
 export interface CheckTemplate {
   id: string;
   name: string;
@@ -262,7 +267,10 @@ export async function addTemplate(template: CheckTemplate): Promise<void> {
   return withDB(STORE_TEMPLATES, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.put(template);
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        enqueueOperation("addTemplate", template);
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
@@ -276,7 +284,10 @@ export async function deleteTemplate(id: string): Promise<void> {
   return withDB(STORE_TEMPLATES, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.delete(id);
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        enqueueOperation("deleteTemplate", { id });
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
@@ -296,21 +307,36 @@ export async function addRecord(record: ReviewRecord): Promise<void> {
   return withDB(STORE_RECORDS, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.put(record);
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        enqueueOperation("addRecord", record);
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
 }
 
 export async function updateRecord(record: ReviewRecord): Promise<void> {
-  return addRecord(record);
+  return withDB(STORE_RECORDS, "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.put(record);
+      request.onsuccess = () => {
+        enqueueOperation("updateRecord", record);
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
 }
 
 export async function deleteRecord(id: string): Promise<void> {
   return withDB(STORE_RECORDS, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.delete(id);
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        enqueueOperation("deleteRecord", { id });
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
@@ -335,8 +361,12 @@ export async function getAllReviewNotes(): Promise<ReviewState> {
 export async function saveReviewNote(recordId: string, note: string): Promise<void> {
   return withDB(STORE_REVIEW_NOTES, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
-      const request = store.put({ recordId, note });
-      request.onsuccess = () => resolve();
+      const data = { recordId, note };
+      const request = store.put(data);
+      request.onsuccess = () => {
+        enqueueOperation("saveReviewNote", data);
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
@@ -362,7 +392,10 @@ export async function saveReleaseReview(review: ReleaseReviewResult): Promise<vo
   return withDB(STORE_RELEASE_REVIEWS, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.put(review);
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        enqueueOperation("saveReleaseReview", review);
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
@@ -388,21 +421,36 @@ export async function addDefect(defect: DefectItem): Promise<void> {
   return withDB(STORE_DEFECTS, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.put(defect);
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        enqueueOperation("addDefect", defect);
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
 }
 
 export async function updateDefect(defect: DefectItem): Promise<void> {
-  return addDefect(defect);
+  return withDB(STORE_DEFECTS, "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.put(defect);
+      request.onsuccess = () => {
+        enqueueOperation("updateDefect", defect);
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
 }
 
 export async function deleteDefect(id: string): Promise<void> {
   return withDB(STORE_DEFECTS, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.delete(id);
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => {
+        enqueueOperation("deleteDefect", { id });
+        resolve();
+      };
       request.onerror = () => reject(request.error);
     });
   });
@@ -425,6 +473,7 @@ export async function createDefectFromRecord(record: ReviewRecord): Promise<Defe
     updatedAt: now
   };
   await addDefect(defect);
+  enqueueOperation("createDefectFromRecord", { sourceRecordId: record.id, defectId: defect.id });
   return defect;
 }
 
@@ -436,6 +485,7 @@ export async function initializeDatabase(): Promise<{
   defects: DefectState;
 }> {
   await seedDemoData();
+  await cacheStaticAssets();
   const [templates, records, reviewNotes, releaseReviews, defects] = await Promise.all([
     getAllTemplates(),
     getAllRecords(),
