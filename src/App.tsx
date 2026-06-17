@@ -338,7 +338,7 @@ interface DefectCardProps {
   onFormChange: (defectId: string, field: string, value: string) => void;
   onStartProcessing: (defectId: string) => void;
   onComplete: (defectId: string) => void;
-  onReject: (defectId: string) => void;
+  onReject: (defectId: string, reason?: string) => void;
   onReopen: (defectId: string) => void;
   onDelete: (defectId: string) => void;
   isHistory?: boolean;
@@ -509,8 +509,7 @@ function DefectCard({
                 onClick={() => {
                   const reason = prompt("请填写退回复核原因：");
                   if (reason) {
-                    onFormChange(defect.id, "rejectedReason", reason);
-                    setTimeout(() => onReject(defect.id), 50);
+                    onReject(defect.id, reason);
                   }
                 }}
               >
@@ -817,12 +816,12 @@ function App() {
     }
   };
 
-  const handleRejectDefect = async (defectId: string) => {
+  const handleRejectDefect = async (defectId: string, rejectedReasonOverride?: string) => {
     const defect = defects[defectId];
     if (!defect) return;
 
     const formVals = defectFormValues[defectId] || {};
-    const rejectedReason = formVals.rejectedReason || "";
+    const rejectedReason = rejectedReasonOverride || formVals.rejectedReason || "";
 
     if (!rejectedReason.trim()) {
       alert("请填写退回复核原因！");
