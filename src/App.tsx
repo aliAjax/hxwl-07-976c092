@@ -315,6 +315,12 @@ function App() {
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [isExportPreviewOpen, setIsExportPreviewOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "failed">("idle");
+  const [isMatrixDetailOpen, setIsMatrixDetailOpen] = useState(false);
+  const [matrixDetailData, setMatrixDetailData] = useState<{
+    aircraftType: string;
+    ataChapter: string;
+    records: ReviewRecord[];
+  } | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -532,6 +538,42 @@ function App() {
     return { normal, pending, defect };
   }, [filteredRecords]);
 
+  const matrixData = useMemo(() => {
+    const aircraftTypes = Array.from(new Set(reviewRecords.map(r => r.aircraftType))).sort();
+    const ataChapters = Array.from(new Set(reviewRecords.map(r => r.ataChapter))).sort();
+    
+    const matrix: Record<string, Record<string, ReviewRecord[]>> = {};
+    
+    aircraftTypes.forEach(aircraft => {
+      matrix[aircraft] = {};
+      ataChapters.forEach(chapter => {
+        matrix[aircraft][chapter] = filteredRecords.filter(
+          r => r.aircraftType === aircraft && r.ataChapter === chapter
+        );
+      });
+    });
+
+    return { aircraftTypes, ataChapters, matrix };
+  }, [reviewRecords, filteredRecords]);
+
+  const getCellStatus = (records: ReviewRecord[]): "normal" | "pending" | "defect" | "not-started" => {
+    if (records.length === 0) return "not-started";
+    if (records.some(r => r.status.includes("缺陷"))) return "defect";
+    if (records.some(r => r.status.includes("待复核"))) return "pending";
+    return "normal";
+  };
+
+  const handleMatrixCellClick = (aircraftType: string, ataChapter: string) => {
+    const records = matrixData.matrix[aircraftType]?.[ataChapter] || [];
+    setMatrixDetailData({ aircraftType, ataChapter, records });
+    setIsMatrixDetailOpen(true);
+  };
+
+  const closeMatrixDetail = () => {
+    setIsMatrixDetailOpen(false);
+    setMatrixDetailData(null);
+  };
+
   const handleFormChange = (field: keyof FormValues, value: string) => {
     setFormValues(prev => ({ ...prev, [field]: value }));
   };
@@ -738,6 +780,65 @@ function App() {
         {project.metrics.map((metric: string, index: number) => (
           <MetricCard key={metric} label={metric} value={values[index]} index={index} />
         ))}
+      </section>
+
+      <section className="matrix-panel">
+        <div className="section-heading">
+          <div>
+            <p>ATA进度追踪</p>
+            <h2>章节进度矩阵</h2>
+          </div>
+          <div className="matrix-legend">
+            <div className="legend-item">
+              <span className="legend-dot legend-normal"></span>
+              <span>正常</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-dot legend-pending"></span>
+              <span>待复核</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-dot legend-defect"></span>
+              <span>缺陷</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-dot legend-not-started"></span>
+              <span>未开始</span>
+            </div>
+          </div>
+        </div>
+        <div className="matrix-container">
+          <table className="ata-matrix">
+            <thead>
+              <tr>
+                <th className="matrix-corner">机型 \ ATA章节</th>
+                {matrixData.ataChapters.map(chapter => (
+                  <th key={chapter} className="matrix-header">{chapter}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {matrixData.aircraftTypes.map(aircraft => (
+                <tr key={aircraft}>
+                  <td className="matrix-row-header">{aircraft}</td>
+                  {matrixData.ataChapters.map(chapter => {
+                    const records = matrixData.matrix[aircraft]?.[chapter] || [];
+                    const status = getCellStatus(records);
+                    return (
+                      <td
+                        key={`${aircraft}-${chapter}`}
+                        className={`matrix-cell matrix-cell-${status}`}
+                        onClick={() => handleMatrixCellClick(aircraft, chapter)}
+                      >
+                        <span className="cell-count">{records.length}</span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="workspace">
@@ -1224,6 +1325,65 @@ function App() {
               <button className="primary-action" onClick={saveTemplate}>
                 保存
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isMatrixDetailOpen && matrixDetailData && (
+        <div className="modal-overlay" onClick={closeMatrixDetail}>
+          <div className="matrix-detail-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>
+                {matrixDetailData.aircraftType} - {matrixDetailData.ataChapter}
+                <span className="detail-count-badge">
+                  共 {matrixDetailData.records.length} 条记录
+                </span>
+              </h2>
+              <button className="close-btn" onClick={closeMatrixDetail}>×</button>
+            </div>
+            <div className="modal-body">
+              {matrixDetailData.records.length === 0 ? (
+                <div className="empty-state">
+                  <p>该机型章节下暂无记录</p>
+                </div>
+              ) : (
+                <div className="matrix-detail-list">
+                  {matrixDetailData.records.map((record, index) => (
+                    <article key={record.id} className="detail-card">
+                      <div className="detail-card-header">
+                        <div className="detail-card-index">{String(index + 1).padStart(2, "0")}</div>
+                        <div className="detail-card-title">
+                          <div className="detail-card-top">
+                            <h3>{record.checkArea}</h3>
+                            <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+                              {record.status}
+                            </span>
+                          </div>
+                          {record.checkItem && (
+                            <p className="detail-check-item">{record.checkItem}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="detail-card-body">
+                        <div className="detail-section">
+                          <span className="detail-label">缺陷描述：</span>
+                          <span>{record.defectDesc || "无"}</span>
+                        </div>
+                        {record.handling && (
+                          <div className="detail-section">
+                            <span className="detail-label">处理意见：</span>
+                            <span>{record.handling}</span>
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button onClick={closeMatrixDetail}>关闭</button>
             </div>
           </div>
         </div>
