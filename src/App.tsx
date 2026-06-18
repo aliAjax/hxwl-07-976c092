@@ -646,6 +646,7 @@ function App() {
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
+  const [isTemplateFromRecord, setIsTemplateFromRecord] = useState(false);
   const [templateForm, setTemplateForm] = useState<TemplateFormValues>({
     name: "",
     aircraftType: "",
@@ -1432,6 +1433,7 @@ function App() {
 
   const openNewModal = () => {
     setEditingTemplate(null);
+    setIsTemplateFromRecord(false);
     setTemplateForm({
       name: "",
       aircraftType: "",
@@ -1447,6 +1449,7 @@ function App() {
 
   const openEditModal = (template: CheckTemplate) => {
     setEditingTemplate(template);
+    setIsTemplateFromRecord(false);
     setTemplateForm({
       name: template.name,
       aircraftType: template.aircraftType,
@@ -1460,13 +1463,46 @@ function App() {
     setIsModalOpen(true);
   };
 
+  const openSaveAsTemplateModal = (record: ReviewRecord) => {
+    setEditingTemplate(null);
+    setIsTemplateFromRecord(true);
+    const defaultName = `${record.aircraftType} ${record.checkArea}检查模板`;
+    setTemplateForm({
+      name: defaultName,
+      aircraftType: record.aircraftType,
+      ataChapter: record.ataChapter,
+      checkArea: record.checkArea,
+      checkItem: record.checkItem || "",
+      defectDesc: record.defectDesc,
+      handling: record.handling,
+      signer: ""
+    });
+    setIsModalOpen(true);
+  };
+
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingTemplate(null);
+    setIsTemplateFromRecord(false);
+  };
+
+  const isTemplateNameDuplicate = (name: string): boolean => {
+    const trimmedName = name.trim();
+    if (trimmedName === "") return false;
+    return templates.some(t => 
+      t.name.trim() === trimmedName && t.id !== editingTemplate?.id
+    );
   };
 
   const saveTemplate = async () => {
     if (templateForm.name.trim() === "") return;
+
+    if (isTemplateNameDuplicate(templateForm.name)) {
+      const confirmed = window.confirm(
+        `模板名称"${templateForm.name.trim()}"已存在，是否继续保存？`
+      );
+      if (!confirmed) return;
+    }
 
     if (editingTemplate) {
       const updated = { ...editingTemplate, ...templateForm };
@@ -2511,6 +2547,14 @@ function App() {
                           </p>
                         </div>
                         <div className="record-actions">
+                          {activeRole !== "培训教员" && (
+                            <button
+                              className="save-as-template-btn"
+                              onClick={() => openSaveAsTemplateModal(record)}
+                            >
+                              保存为模板
+                            </button>
+                          )}
                           {hasDefect && (
                             <button
                               className="generate-defect-btn"
@@ -2594,7 +2638,7 @@ function App() {
         <div className="modal-overlay" onClick={closeModal}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{editingTemplate ? "编辑模板" : "新增模板"}</h2>
+              <h2>{editingTemplate ? "编辑模板" : isTemplateFromRecord ? "保存为模板" : "新增模板"}</h2>
               <button className="close-btn" onClick={closeModal}>×</button>
             </div>
             <div className="modal-body">
@@ -2606,6 +2650,11 @@ function App() {
                     value={templateForm.name}
                     onChange={e => handleTemplateFormChange("name", e.target.value)}
                   />
+                  {isTemplateNameDuplicate(templateForm.name) && (
+                    <p className="duplicate-name-warning">
+                      ⚠️ 该模板名称已存在，保存时会提示确认
+                    </p>
+                  )}
                 </label>
                 <label>
                   <span>机型</span>

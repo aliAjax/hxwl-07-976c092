@@ -1961,6 +1961,26 @@ textarea {
 
 .record-actions {
   flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.save-as-template-btn {
+  min-height: 34px;
+  font-size: 13px;
+  padding: 0 14px;
+  font-weight: 600;
+  background: #1d4ed8;
+  color: #ffffff;
+  border-color: #1d4ed8;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.save-as-template-btn:hover {
+  background: #1e40af;
+  border-color: #1e40af;
 }
 
 .generate-defect-btn {
@@ -1985,6 +2005,16 @@ textarea {
   border-color: #94a3b8;
   cursor: not-allowed;
   opacity: 0.7;
+}
+
+.duplicate-name-warning {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #f59e0b;
 }
 
 @media (max-width: 1024px) {
