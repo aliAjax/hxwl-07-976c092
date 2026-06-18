@@ -2171,10 +2171,14 @@ function App() {
             descLines.forEach((dl, i) => {
               lines.push(`        ${i === 0 ? "├─ 缺陷描述：    " : "│               "}${dl}`);
             });
+          } else {
+            lines.push(`        ├─ 缺陷描述：    ── 无 ──`);
           }
 
           if (record.handling) {
             lines.push(`        ├─ 处理意见：    ${record.handling}`);
+          } else {
+            lines.push(`        ├─ 处理意见：    ── 待填写 ──`);
           }
 
           if (review) {
@@ -2185,28 +2189,50 @@ function App() {
               opinionLines.forEach((ol, i) => {
                 lines.push(`        ${i === 0 ? "│  放行意见：   " : "│               "}${ol}`);
               });
+            } else if (isDefect) {
+              lines.push(`        │  放行意见：   ⚠ 必填 ── 请填写缺陷处置理由 ──`);
+            } else {
+              lines.push(`        │  放行意见：   ── 无补充意见 ──`);
             }
           } else {
             lines.push(`        ├─ 放行复核：    待复核`);
+            if (isDefect) {
+              lines.push(`        │  放行意见：   ⚠ 必填 ── 待放行人员填写处置意见 ──`);
+            } else {
+              lines.push(`        │  放行意见：   ── 待复核 ──`);
+            }
           }
 
-          if (relatedDefect) {
-            const defectStatusText =
-              relatedDefect.status === "pending" ? "待处理" :
-              relatedDefect.status === "processing" ? "处理中" :
-              relatedDefect.status === "completed" ? "已完成" : "已退回";
-            const priorityText = PRIORITY_TEXT[relatedDefect.priority];
-            lines.push(`        ├─ 缺陷处理状态：${defectStatusText}（优先级：${priorityText}）`);
-            if (relatedDefect.handlingOpinion) {
-              lines.push(`        │  处理方案：    ${relatedDefect.handlingOpinion}`);
-            }
-            if (relatedDefect.assignedSigner) {
-              lines.push(`        │  指定签署人：  ${relatedDefect.assignedSigner}`);
-            }
-            if (relatedDefect.expectedCompletionTime) {
-              lines.push(`        │  预计完成：    ${new Date(relatedDefect.expectedCompletionTime).toLocaleString("zh-CN", {
-                month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
-              })}`);
+          if (isDefect) {
+            if (relatedDefect) {
+              const defectStatusText =
+                relatedDefect.status === "pending" ? "待处理" :
+                relatedDefect.status === "processing" ? "处理中" :
+                relatedDefect.status === "completed" ? "已完成" : "已退回";
+              const priorityText = PRIORITY_TEXT[relatedDefect.priority];
+              lines.push(`        ├─ 缺陷处理状态：${defectStatusText}（优先级：${priorityText}）`);
+              if (relatedDefect.handlingOpinion) {
+                lines.push(`        │  处理方案：    ${relatedDefect.handlingOpinion}`);
+              } else {
+                lines.push(`        │  处理方案：    ⚠ 必填 ── 待填写维修处理方案 ──`);
+              }
+              if (relatedDefect.assignedSigner) {
+                lines.push(`        │  指定签署人：  ${relatedDefect.assignedSigner}`);
+              } else {
+                lines.push(`        │  指定签署人：  ⚠ 必填 ── 待指定 ──`);
+              }
+              if (relatedDefect.expectedCompletionTime) {
+                lines.push(`        │  预计完成：    ${new Date(relatedDefect.expectedCompletionTime).toLocaleString("zh-CN", {
+                  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                })}`);
+              } else {
+                lines.push(`        │  预计完成：    ── 未设定 ──`);
+              }
+            } else {
+              lines.push(`        ├─ 缺陷处理状态：⚠ 未加入缺陷处理清单`);
+              lines.push(`        │  处理方案：    ⚠ 必填 ── 待生成缺陷并填写 ──`);
+              lines.push(`        │  指定签署人：  ⚠ 必填 ── 待指定 ──`);
+              lines.push(`        │  预计完成：    ── 未设定 ──`);
             }
           }
 
