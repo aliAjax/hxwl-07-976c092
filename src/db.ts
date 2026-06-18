@@ -571,7 +571,7 @@ export async function createDefectFromRecord(
     updatedAt: now
   };
   await addDefect(defect);
-  enqueueOperation("createDefectFromRecord", { sourceRecordId: record.id, defectId: defect.id });
+  enqueueOperation("createDefectFromRecord", defect);
   return defect;
 }
 

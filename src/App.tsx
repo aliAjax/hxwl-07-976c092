@@ -937,6 +937,9 @@ function App() {
     try {
       await saveTrainingComment(newComment);
       setTrainingComments(prev => ({ ...prev, [recordId]: newComment }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("培训讲评已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to save training comment:", error);
     }
@@ -957,6 +960,9 @@ function App() {
     try {
       await saveTrainingComment(newComment);
       setTrainingComments(prev => ({ ...prev, [recordId]: newComment }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("培训讲评已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to save training comment status:", error);
     }

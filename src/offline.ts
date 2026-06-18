@@ -16,7 +16,9 @@ export type OperationType =
   | "addDefect"
   | "updateDefect"
   | "deleteDefect"
-  | "createDefectFromRecord";
+  | "createDefectFromRecord"
+  | "addStatusHistory"
+  | "saveTrainingComment";
 
 export interface SyncOperation {
   id: string;
@@ -334,18 +336,18 @@ export function getOperationSummary(op: SyncOperation): string {
     case "deleteTemplate":
       return [p.name, p.aircraftType, p.ataChapter].filter(Boolean).join(" · ") || p.id || "";
     case "saveReviewNote":
-      return [p.recordId && `记录:${p.recordId}`, p.note && `备注:${p.note.slice(0, 20)}`].filter(Boolean).join(" · ") || p.recordId || "";
+      return [p.recordId && `记录:${p.recordId}`, p.note && `备注:${(p.note as string).slice(0, 20)}`].filter(Boolean).join(" · ") || p.recordId || "";
     case "saveReleaseReview":
-      return [p.recordId && `记录:${p.recordId}`, p.status === "passed" ? "通过" : p.status === "rejected" ? "驳回" : "", p.reviewer].filter(Boolean).join(" · ") || p.recordId || "";
+      return [p.recordId && `记录:${p.recordId}`, p.status === "passed" ? "放行通过" : p.status === "rejected" ? "放行驳回" : "", p.reviewer].filter(Boolean).join(" · ") || p.recordId || "";
     case "addDefect":
     case "updateDefect":
     case "deleteDefect":
     case "createDefectFromRecord":
-      return [p.aircraftType, p.ataChapter, p.defectDesc && `缺陷:${(p.defectDesc as string).slice(0, 20)}`, p.status && `状态:${p.status}`].filter(Boolean).join(" · ") || p.id || "";
+      return [p.aircraftType, p.ataChapter, p.checkArea, p.defectDesc && `缺陷:${(p.defectDesc as string).slice(0, 20)}`, p.status && `状态:${p.status}`].filter(Boolean).join(" · ") || p.id || p.defectId || "";
     case "addStatusHistory":
-      return [p.recordId && `记录:${p.recordId}`, p.fromStatus && `${p.fromStatus}→${p.toStatus}`].filter(Boolean).join(" · ") || "";
+      return [p.recordId && `记录:${p.recordId}`, p.fromStatus && `${p.fromStatus}→${p.toStatus}`, p.operatorRole].filter(Boolean).join(" · ") || p.recordId || "";
     case "saveTrainingComment":
-      return [p.recordId && `记录:${p.recordId}`, p.status && `讲评:${p.status}`].filter(Boolean).join(" · ") || p.recordId || "";
+      return [p.recordId && `记录:${p.recordId}`, p.comment && `讲评:${(p.comment as string).slice(0, 20)}`, p.status && `状态:${p.status}`].filter(Boolean).join(" · ") || p.recordId || "";
     default:
       return "";
   }
@@ -622,7 +624,9 @@ const operationLabels: Record<OperationType, string> = {
   addDefect: "新增缺陷",
   updateDefect: "更新缺陷",
   deleteDefect: "删除缺陷",
-  createDefectFromRecord: "从记录生成缺陷"
+  createDefectFromRecord: "从记录生成缺陷",
+  addStatusHistory: "新增状态历史",
+  saveTrainingComment: "保存培训讲评"
 };
 
 export function getOperationLabel(type: OperationType): string {
