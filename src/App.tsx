@@ -365,6 +365,7 @@ interface DefectCardProps {
   getTimeStatus?: (defect: DefectItem) => { status: string; remainingMs: number; displayText: string };
   getPriorityText?: (priority: DefectPriority) => string;
   getPriorityBadgeClass?: (priority: DefectPriority) => string;
+  onPriorityOrTimeSave?: (defectId: string, field: "priority" | "expectedCompletionTime", value: string) => void;
 }
 
 function DefectCard({
@@ -385,7 +386,8 @@ function DefectCard({
   showLifecycleActions = true,
   getTimeStatus,
   getPriorityText,
-  getPriorityBadgeClass
+  getPriorityBadgeClass,
+  onPriorityOrTimeSave
 }: DefectCardProps) {
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString("zh-CN", {
@@ -541,7 +543,12 @@ function DefectCard({
                 <select
                   className="defect-input"
                   value={formValues.priority || defect.priority || "medium"}
-                  onChange={e => onFormChange(defect.id, "priority", e.target.value)}
+                  onChange={e => {
+                    onFormChange(defect.id, "priority", e.target.value);
+                    if (onPriorityOrTimeSave) {
+                      onPriorityOrTimeSave(defect.id, "priority", e.target.value);
+                    }
+                  }}
                 >
                   <option value="low">低</option>
                   <option value="medium">中</option>
@@ -555,7 +562,12 @@ function DefectCard({
                   type="datetime-local"
                   className="defect-input"
                   value={formValues.expectedCompletionTime || formatDateTimeLocal(defect.expectedCompletionTime)}
-                  onChange={e => onFormChange(defect.id, "expectedCompletionTime", e.target.value)}
+                  onChange={e => {
+                    onFormChange(defect.id, "expectedCompletionTime", e.target.value);
+                    if (onPriorityOrTimeSave) {
+                      onPriorityOrTimeSave(defect.id, "expectedCompletionTime", e.target.value);
+                    }
+                  }}
                 />
               </label>
               <label className="full-width">
@@ -731,6 +743,11 @@ function App() {
   const [trainingComments, setTrainingComments] = useState<TrainingCommentState>({});
   const [activeHistoryRecordId, setActiveHistoryRecordId] = useState<string | null>(null);
   const [activeDefectTab, setActiveDefectTab] = useState<"pending" | "history">("pending");
+  const [isCreateDefectModalOpen, setIsCreateDefectModalOpen] = useState(false);
+  const [createDefectSourceRecord, setCreateDefectSourceRecord] = useState<ReviewRecord | null>(null);
+  const [createDefectPriority, setCreateDefectPriority] = useState<DefectPriority>("medium");
+  const [createDefectExpectedTime, setCreateDefectExpectedTime] = useState<string>("");
+  const [timeTick, setTimeTick] = useState(0);
   const [defectFormValues, setDefectFormValues] = useState<Record<string, { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string; priority: DefectPriority; expectedCompletionTime: string }>>({});
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -834,6 +851,13 @@ function App() {
       unsubscribeSWStatus();
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTimeTick(t => t + 1);
+    }, 30 * 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const refreshData = async () => {
@@ -1349,8 +1373,10 @@ function App() {
       if (toStatus === "缺陷") {
         const existingDefect = Object.values(defects).find(d => d.sourceRecordId === recordId);
         if (!existingDefect) {
-          const defect = await createDefectFromRecord(updatedRecord);
-          setDefects(prev => ({ ...prev, [defect.id]: defect }));
+          setCreateDefectSourceRecord(updatedRecord);
+          setCreateDefectPriority("medium");
+          setCreateDefectExpectedTime("");
+          setIsCreateDefectModalOpen(true);
         }
       }
       if (fromStatus === "缺陷" && toStatus === "正常") {
@@ -1382,19 +1408,56 @@ function App() {
     }
   };
 
-  const handleGenerateDefectFromRecord = async (record: ReviewRecord) => {
+  const handleGenerateDefectFromRecord = (record: ReviewRecord) => {
     const existingDefect = Object.values(defects).find(d => d.sourceRecordId === record.id);
     if (existingDefect) {
       alert("该缺陷项已存在于待处理清单中！");
       return;
     }
+    setCreateDefectSourceRecord(record);
+    setCreateDefectPriority("medium");
+    setCreateDefectExpectedTime("");
+    setIsCreateDefectModalOpen(true);
+  };
+
+  const handleConfirmCreateDefect = async () => {
+    if (!createDefectSourceRecord) return;
     try {
-      const defect = await createDefectFromRecord(record);
+      const options: { priority?: DefectPriority; expectedCompletionTime?: number } = {
+        priority: createDefectPriority
+      };
+      if (createDefectExpectedTime) {
+        options.expectedCompletionTime = new Date(createDefectExpectedTime).getTime();
+      }
+      const defect = await createDefectFromRecord(createDefectSourceRecord, options);
       setDefects(prev => ({ ...prev, [defect.id]: defect }));
+      setIsCreateDefectModalOpen(false);
+      setCreateDefectSourceRecord(null);
       alert("缺陷项已添加到待处理清单！");
     } catch (error) {
       console.error("Failed to generate defect from record:", error);
       alert("生成缺陷项失败，请重试。");
+    }
+  };
+
+  const handleCancelCreateDefect = () => {
+    setIsCreateDefectModalOpen(false);
+    setCreateDefectSourceRecord(null);
+  };
+
+  const handleDefectPriorityOrTimeSave = async (defectId: string, field: "priority" | "expectedCompletionTime", value: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+    const updatedDefect: DefectItem = {
+      ...defect,
+      [field]: field === "expectedCompletionTime" && value ? new Date(value).getTime() : (field === "expectedCompletionTime" ? undefined : value),
+      updatedAt: Date.now()
+    };
+    try {
+      await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+    } catch (error) {
+      console.error("Failed to update defect:", error);
     }
   };
 
@@ -1651,7 +1714,7 @@ function App() {
     const overdue = activeDefects.filter(d => isOverdue(d)).length;
     const soonOverdue = activeDefects.filter(d => isSoonOverdue(d)).length;
     return { total: allDefects.length, pending, processing, completed, rejected, overdue, soonOverdue };
-  }, [defects]);
+  }, [defects, timeTick]);
 
   const groupedDefects = useMemo(() => {
     const allDefects = Object.values(defects);
@@ -1668,7 +1731,7 @@ function App() {
       });
     const history = allDefects.filter(d => d.status === "completed" || d.status === "rejected");
     return { pending, history };
-  }, [defects]);
+  }, [defects, timeTick]);
 
   const getDefectSourceRecord = (sourceRecordId: string): ReviewRecord | undefined => {
     return reviewRecords.find(r => r.id === sourceRecordId);
@@ -2795,6 +2858,7 @@ function App() {
                         getTimeStatus={getTimeStatus}
                         getPriorityText={(p) => PRIORITY_TEXT[p]}
                         getPriorityBadgeClass={getPriorityBadgeClass}
+                        onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
                       />
                     );
                   })
@@ -2834,6 +2898,7 @@ function App() {
                         getTimeStatus={getTimeStatus}
                         getPriorityText={(p) => PRIORITY_TEXT[p]}
                         getPriorityBadgeClass={getPriorityBadgeClass}
+                        onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
                       />
                     );
                   })
@@ -3143,6 +3208,7 @@ function App() {
                       getTimeStatus={getTimeStatus}
                       getPriorityText={(p) => PRIORITY_TEXT[p]}
                       getPriorityBadgeClass={getPriorityBadgeClass}
+                      onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
                     />
                     );
                   })
@@ -3181,6 +3247,7 @@ function App() {
                       getTimeStatus={getTimeStatus}
                       getPriorityText={(p) => PRIORITY_TEXT[p]}
                       getPriorityBadgeClass={getPriorityBadgeClass}
+                      onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
                     />
                     );
                   })
@@ -3341,6 +3408,67 @@ function App() {
           </div>
         </section>
         </>
+      )}
+
+      {isCreateDefectModalOpen && createDefectSourceRecord && (
+        <div className="modal-overlay" onClick={handleCancelCreateDefect}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>创建缺陷登记</h2>
+              <button className="close-btn" onClick={handleCancelCreateDefect}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="field-grid">
+                <label>
+                  <span>机型</span>
+                  <input value={createDefectSourceRecord.aircraftType} disabled className="disabled-input" />
+                </label>
+                <label>
+                  <span>ATA章节</span>
+                  <input value={createDefectSourceRecord.ataChapter} disabled className="disabled-input" />
+                </label>
+                <label className="full-width">
+                  <span>检查区域</span>
+                  <input value={createDefectSourceRecord.checkArea} disabled className="disabled-input" />
+                </label>
+                {createDefectSourceRecord.checkItem && (
+                  <label className="full-width">
+                    <span>检查项目</span>
+                    <input value={createDefectSourceRecord.checkItem} disabled className="disabled-input" />
+                  </label>
+                )}
+                <label className="full-width">
+                  <span>缺陷描述</span>
+                  <textarea value={createDefectSourceRecord.defectDesc} disabled className="disabled-input" rows={2} />
+                </label>
+                <label>
+                  <span>优先级 <span className="required-mark">*</span></span>
+                  <select
+                    value={createDefectPriority}
+                    onChange={e => setCreateDefectPriority(e.target.value as DefectPriority)}
+                  >
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                    <option value="critical">紧急</option>
+                  </select>
+                </label>
+                <label>
+                  <span>预计完成时间</span>
+                  <input
+                    type="datetime-local"
+                    value={createDefectExpectedTime}
+                    onChange={e => setCreateDefectExpectedTime(e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={handleCancelCreateDefect}>取消</button>
+              <button className="btn-primary" onClick={handleConfirmCreateDefect}>确认创建</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {isModalOpen && (
