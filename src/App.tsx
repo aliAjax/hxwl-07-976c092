@@ -2083,31 +2083,158 @@ function App() {
 
   const generateExportSummary = useMemo(() => {
     const lines: string[] = [];
-    lines.push("航空维修检查记录摘要");
-    lines.push("=".repeat(50));
-    lines.push(`生成时间: ${new Date().toLocaleString("zh-CN")}`);
+    const now = new Date();
+    const dateStr = now.toLocaleString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+
+    lines.push("╔══════════════════════════════════════════════════╗");
+    lines.push("║           航空维修放行前检查摘要报告              ║");
+    lines.push("╚══════════════════════════════════════════════════╝");
+    lines.push("");
+    lines.push(`生成时间：${dateStr}`);
+    lines.push(`筛选范围：${recordFilters.aircraftType || "全部机型"} / ${recordFilters.ataChapter || "全部章节"}`);
     lines.push("");
 
-    reviewRecords.forEach((record, index) => {
-      lines.push(`【记录 ${String(index + 1).padStart(2, "0")}】`);
-      lines.push(`  机型: ${record.aircraftType}`);
-      lines.push(`  ATA章节: ${record.ataChapter}`);
-      lines.push(`  检查区域: ${record.checkArea}`);
-      lines.push(`  缺陷描述: ${record.defectDesc || "无"}`);
-      lines.push(`  处理意见: ${record.handling || "待处理"}`);
-      lines.push(`  状态: ${record.status}`);
+    const total = releaseStats.total;
+    const completionRate = total > 0
+      ? Math.round((releaseStats.passed / total) * 100)
+      : 0;
+
+    lines.push("┌──────────────────────────────────────────────────┐");
+    lines.push("│                    统计概览                       │");
+    lines.push("├──────────────────────────────────────────────────┤");
+    lines.push(`│  完成率：     ${String(completionRate).padStart(4)}%${" ".repeat(33)}│`);
+    lines.push(`│  记录总数：   ${String(total).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  待复核数：   ${String(releaseStats.pending).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  缺陷项数：   ${String(releaseStats.defect).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  已通过：     ${String(releaseStats.passed).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  已驳回：     ${String(releaseStats.rejected).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push("└──────────────────────────────────────────────────┘");
+    lines.push("");
+
+    const groupedByAircraft = new Map<string, Map<string, ReviewRecord[]>>();
+    filteredRecords.forEach(record => {
+      if (!groupedByAircraft.has(record.aircraftType)) {
+        groupedByAircraft.set(record.aircraftType, new Map());
+      }
+      const ataMap = groupedByAircraft.get(record.aircraftType)!;
+      if (!ataMap.has(record.ataChapter)) {
+        ataMap.set(record.ataChapter, []);
+      }
+      ataMap.get(record.ataChapter)!.push(record);
+    });
+
+    const sortedAircrafts = Array.from(groupedByAircraft.keys()).sort();
+
+    lines.push("▓▓ 异常记录详情（按机型 & ATA章节分组） ▓▓");
+    lines.push("");
+
+    sortedAircrafts.forEach(aircraft => {
+      const ataMap = groupedByAircraft.get(aircraft)!;
+      const sortedAtas = Array.from(ataMap.keys()).sort();
+
+      lines.push(`【机型】${aircraft}`);
+      lines.push("-".repeat(50));
+
+      sortedAtas.forEach(ata => {
+        const records = ataMap.get(ata)!;
+        const abnormalRecords = records.filter(r =>
+          r.status.includes("缺陷") || r.status.includes("待复核")
+        );
+
+        if (abnormalRecords.length === 0) return;
+
+        lines.push(`  ▶ ATA章节：${ata}  （异常 ${abnormalRecords.length} 条）`);
+        lines.push("");
+
+        abnormalRecords.forEach((record, idx) => {
+          const review = releaseReviews[record.id];
+          const comment = trainingComments[record.id];
+          const relatedDefect = Object.values(defects).find(
+            d => d.sourceRecordId === record.id
+          );
+
+          const isDefect = record.status.includes("缺陷");
+          const isPending = record.status.includes("待复核");
+          const typeLabel = isDefect ? "⚠缺陷项" : isPending ? "⏳待复核" : "✓正常";
+
+          lines.push(`    [${String(idx + 1).padStart(2, "0")}] ${typeLabel}  ${record.checkArea}${record.checkItem ? " - " + record.checkItem : ""}`);
+          lines.push(`        ├─ 状态：        ${record.status}`);
+
+          if (record.defectDesc) {
+            const descLines = record.defectDesc.split("\n");
+            descLines.forEach((dl, i) => {
+              lines.push(`        ${i === 0 ? "├─ 缺陷描述：    " : "│               "}${dl}`);
+            });
+          }
+
+          if (record.handling) {
+            lines.push(`        ├─ 处理意见：    ${record.handling}`);
+          }
+
+          if (review) {
+            const reviewStatus = review.status === "passed" ? "✓已通过" : "✗已驳回";
+            lines.push(`        ├─ 放行复核：    ${reviewStatus}（${review.reviewer}）`);
+            if (review.opinion) {
+              const opinionLines = review.opinion.split("\n");
+              opinionLines.forEach((ol, i) => {
+                lines.push(`        ${i === 0 ? "│  放行意见：   " : "│               "}${ol}`);
+              });
+            }
+          } else {
+            lines.push(`        ├─ 放行复核：    待复核`);
+          }
+
+          if (relatedDefect) {
+            const defectStatusText =
+              relatedDefect.status === "pending" ? "待处理" :
+              relatedDefect.status === "processing" ? "处理中" :
+              relatedDefect.status === "completed" ? "已完成" : "已退回";
+            const priorityText = PRIORITY_TEXT[relatedDefect.priority];
+            lines.push(`        ├─ 缺陷处理状态：${defectStatusText}（优先级：${priorityText}）`);
+            if (relatedDefect.handlingOpinion) {
+              lines.push(`        │  处理方案：    ${relatedDefect.handlingOpinion}`);
+            }
+            if (relatedDefect.assignedSigner) {
+              lines.push(`        │  指定签署人：  ${relatedDefect.assignedSigner}`);
+            }
+            if (relatedDefect.expectedCompletionTime) {
+              lines.push(`        │  预计完成：    ${new Date(relatedDefect.expectedCompletionTime).toLocaleString("zh-CN", {
+                month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+              })}`);
+            }
+          }
+
+          if (comment && comment.comment.trim()) {
+            const commentLines = comment.comment.split("\n");
+            lines.push(`        └─ 培训讲评：    [${comment.status}]`);
+            commentLines.forEach((cl, i) => {
+              lines.push(`                        ${cl}`);
+            });
+          } else {
+            lines.push(`        └─ 培训讲评：    [${comment?.status || "待讲评"}] 暂无讲评内容`);
+          }
+
+          lines.push("");
+        });
+
+        lines.push("");
+      });
+
       lines.push("");
     });
 
-    lines.push("-".repeat(50));
-    lines.push(`统计信息: 共 ${reviewStats.total} 条记录`);
-    lines.push(`  正常: ${reviewStats.normal} 条`);
-    lines.push(`  待复核: ${reviewStats.pending} 条`);
-    lines.push(`  缺陷项: ${reviewStats.defect} 条`);
-    lines.push("=".repeat(50));
+    lines.push("═".repeat(50));
+    lines.push(`报告结束  ·  共 ${filteredRecords.length} 条记录  ·  异常 ${releaseStats.pending + releaseStats.defect} 条`);
+    lines.push("═".repeat(50));
 
     return lines.join("\n");
-  }, [reviewRecords, reviewStats]);
+  }, [filteredRecords, releaseStats, recordFilters, releaseReviews, defects, trainingComments]);
 
   const openExportPreview = () => {
     setCopyStatus("idle");
@@ -2758,6 +2885,9 @@ function App() {
                   {releaseStats.defectReviewed > 0 && (
                     <span className="defect-review-count"> · 缺陷 {releaseStats.defectReviewed}</span>
                   )}
+                </button>
+                <button className="primary-action" onClick={openExportPreview}>
+                  📄 导出摘要
                 </button>
               </div>
             </div>
