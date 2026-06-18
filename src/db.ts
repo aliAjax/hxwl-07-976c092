@@ -68,14 +68,43 @@ export interface DefectItem {
 
 export type DefectState = Record<string, DefectItem>;
 
+export type UserRole = "维修工程师" | "放行人员" | "培训教员";
+
+export interface StatusHistoryItem {
+  id: string;
+  recordId: string;
+  fromStatus: string;
+  toStatus: string;
+  operatorRole: UserRole;
+  operatorName: string;
+  changedAt: number;
+  remark?: string;
+  fieldChanges?: Record<string, { oldValue: string; newValue: string }>;
+}
+
+export type StatusHistoryState = Record<string, StatusHistoryItem[]>;
+
+export interface TrainingComment {
+  id: string;
+  recordId: string;
+  comment: string;
+  trainer: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type TrainingCommentState = Record<string, TrainingComment>;
+
 const DB_NAME = "hxwl-07-aviation-maintenance";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const STORE_TEMPLATES = "templates";
 const STORE_RECORDS = "records";
 const STORE_REVIEW_NOTES = "reviewNotes";
 const STORE_RELEASE_REVIEWS = "releaseReviews";
 const STORE_DEFECTS = "defects";
+const STORE_STATUS_HISTORY = "statusHistory";
+const STORE_TRAINING_COMMENTS = "trainingComments";
 
 const SEED_KEY = "hxwl-07-seeded";
 
@@ -191,6 +220,19 @@ function openDB(): Promise<IDBDatabase> {
         defectStore.createIndex("aircraftType", "aircraftType", { unique: false });
         defectStore.createIndex("ataChapter", "ataChapter", { unique: false });
         defectStore.createIndex("createdAt", "createdAt", { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_STATUS_HISTORY)) {
+        const historyStore = db.createObjectStore(STORE_STATUS_HISTORY, { keyPath: "id" });
+        historyStore.createIndex("recordId", "recordId", { unique: false });
+        historyStore.createIndex("operatorRole", "operatorRole", { unique: false });
+        historyStore.createIndex("changedAt", "changedAt", { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_TRAINING_COMMENTS)) {
+        const commentStore = db.createObjectStore(STORE_TRAINING_COMMENTS, { keyPath: "recordId" });
+        commentStore.createIndex("trainer", "trainer", { unique: false });
+        commentStore.createIndex("createdAt", "createdAt", { unique: false });
       }
     };
   });
@@ -477,21 +519,113 @@ export async function createDefectFromRecord(record: ReviewRecord): Promise<Defe
   return defect;
 }
 
+export async function addStatusHistory(history: StatusHistoryItem): Promise<void> {
+  return withDB(STORE_STATUS_HISTORY, "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.put(history);
+      request.onsuccess = () => {
+        enqueueOperation("addStatusHistory", history);
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function getStatusHistoryByRecordId(recordId: string): Promise<StatusHistoryItem[]> {
+  return withDB(STORE_STATUS_HISTORY, "readonly", (store) => {
+    return new Promise<StatusHistoryItem[]>((resolve, reject) => {
+      const index = store.index("recordId");
+      const request = index.getAll(recordId);
+      request.onsuccess = () => {
+        const results = request.result.sort((a, b) => b.changedAt - a.changedAt);
+        resolve(results);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function getAllStatusHistory(): Promise<StatusHistoryState> {
+  return withDB(STORE_STATUS_HISTORY, "readonly", (store) => {
+    return new Promise<StatusHistoryState>((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const history: StatusHistoryState = {};
+        (request.result as StatusHistoryItem[]).forEach(item => {
+          if (!history[item.recordId]) {
+            history[item.recordId] = [];
+          }
+          history[item.recordId].push(item);
+        });
+        Object.keys(history).forEach(key => {
+          history[key].sort((a, b) => b.changedAt - a.changedAt);
+        });
+        resolve(history);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function saveTrainingComment(comment: TrainingComment): Promise<void> {
+  return withDB(STORE_TRAINING_COMMENTS, "readwrite", (store) => {
+    return new Promise<void>((resolve, reject) => {
+      const request = store.put(comment);
+      request.onsuccess = () => {
+        enqueueOperation("saveTrainingComment", comment);
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function getTrainingComment(recordId: string): Promise<TrainingComment | undefined> {
+  return withDB(STORE_TRAINING_COMMENTS, "readonly", (store) => {
+    return new Promise<TrainingComment | undefined>((resolve, reject) => {
+      const request = store.get(recordId);
+      request.onsuccess = () => resolve(request.result as TrainingComment | undefined);
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+export async function getAllTrainingComments(): Promise<TrainingCommentState> {
+  return withDB(STORE_TRAINING_COMMENTS, "readonly", (store) => {
+    return new Promise<TrainingCommentState>((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const comments: TrainingCommentState = {};
+        (request.result as TrainingComment[]).forEach(c => {
+          comments[c.recordId] = c;
+        });
+        resolve(comments);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
 export async function initializeDatabase(): Promise<{
   templates: CheckTemplate[];
   records: ReviewRecord[];
   reviewNotes: ReviewState;
   releaseReviews: ReleaseReviewState;
   defects: DefectState;
+  statusHistory: StatusHistoryState;
+  trainingComments: TrainingCommentState;
 }> {
   await seedDemoData();
   await cacheStaticAssets();
-  const [templates, records, reviewNotes, releaseReviews, defects] = await Promise.all([
+  const [templates, records, reviewNotes, releaseReviews, defects, statusHistory, trainingComments] = await Promise.all([
     getAllTemplates(),
     getAllRecords(),
     getAllReviewNotes(),
     getAllReleaseReviews(),
-    getAllDefects()
+    getAllDefects(),
+    getAllStatusHistory(),
+    getAllTrainingComments()
   ]);
-  return { templates, records, reviewNotes, releaseReviews, defects };
+  return { templates, records, reviewNotes, releaseReviews, defects, statusHistory, trainingComments };
 }

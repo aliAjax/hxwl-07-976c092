@@ -8,12 +8,17 @@ import {
   ReleaseReviewState,
   DefectItem,
   DefectState,
-  DefectStatus,
+  StatusHistoryItem,
+  StatusHistoryState,
+  TrainingComment,
+  TrainingCommentState,
+  UserRole as DBUserRole,
   initializeDatabase,
   addTemplate,
   updateTemplate,
   deleteTemplate as dbDeleteTemplate,
   addRecord,
+  updateRecord,
   saveReviewNote,
   getAllTemplates,
   getAllRecords,
@@ -23,7 +28,11 @@ import {
   getAllDefects,
   updateDefect,
   createDefectFromRecord,
-  deleteDefect
+  deleteDefect,
+  addStatusHistory,
+  saveTrainingComment,
+  getAllStatusHistory,
+  getAllTrainingComments
 } from "./db";
 import {
   WorkflowConfig,
@@ -43,7 +52,12 @@ import {
   getRecordDisplayFields,
   canCreateDefect,
   getInitialStatus,
-  StatusCategory
+  StatusCategory,
+  getRoleVisibleFields,
+  canRolePerformAction,
+  getRoleEditableFields,
+  getRoleSpecificMetrics,
+  getRoleDescription
 } from "./workflow";
 import {
   workflowConfigs,
@@ -138,7 +152,10 @@ function ReleaseReviewCard({
   opinion,
   onOpinionChange,
   onReview,
-  recordType
+  recordType,
+  history,
+  showHistory,
+  onToggleHistory
 }: {
   record: ReviewRecord;
   index: number;
@@ -147,6 +164,9 @@ function ReleaseReviewCard({
   onOpinionChange: (id: string, value: string) => void;
   onReview: (id: string, status: "passed" | "rejected") => void;
   recordType: "normal" | "pending" | "defect";
+  history?: StatusHistoryItem[];
+  showHistory?: boolean;
+  onToggleHistory?: (id: string) => void;
 }) {
   const isReviewed = !!review;
   const isPassed = review?.status === "passed";
@@ -213,6 +233,14 @@ function ReleaseReviewCard({
             {isDefectType && !isReviewed && (
               <span className="defect-warning-tag">⚠️ 需谨慎处理</span>
             )}
+            {onToggleHistory && (
+              <button
+                className="history-btn"
+                onClick={() => onToggleHistory(record.id)}
+              >
+                📋 状态历史 ({history?.length || 0})
+              </button>
+            )}
           </div>
           <div className="release-card-meta">
             <span className="meta-tag">{record.ataChapter}</span>
@@ -221,6 +249,27 @@ function ReleaseReviewCard({
           </div>
         </div>
       </div>
+
+      {showHistory && history && history.length > 0 && (
+        <div className="history-timeline">
+          <div className="section-label">状态变更历史</div>
+          {history.map((item) => (
+            <div key={item.id} className="history-timeline-item">
+              <div className="history-dot"></div>
+              <div className="history-content">
+                <div className="history-header">
+                  <span className="history-status-from">{item.fromStatus}</span>
+                  <span className="history-arrow">→</span>
+                  <span className="history-status-to">{item.toStatus}</span>
+                  <span className="history-operator">{item.operatorRole}</span>
+                  <span className="history-time">{formatTime(item.changedAt)}</span>
+                </div>
+                {item.remark && <div className="history-remark">{item.remark}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="release-card-body">
         <div className="defect-section">
@@ -589,6 +638,9 @@ function App() {
   const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
   const [releaseReviews, setReleaseReviews] = useState<ReleaseReviewState>({});
   const [defects, setDefects] = useState<DefectState>({});
+  const [statusHistory, setStatusHistory] = useState<StatusHistoryState>({});
+  const [trainingComments, setTrainingComments] = useState<TrainingCommentState>({});
+  const [activeHistoryRecordId, setActiveHistoryRecordId] = useState<string | null>(null);
   const [activeDefectTab, setActiveDefectTab] = useState<"pending" | "history">("pending");
   const [defectFormValues, setDefectFormValues] = useState<Record<string, { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string }>>({});
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
@@ -634,6 +686,8 @@ function App() {
         setReviewNotes(data.reviewNotes);
         setReleaseReviews(data.releaseReviews);
         setDefects(data.defects);
+        setStatusHistory(data.statusHistory);
+        setTrainingComments(data.trainingComments);
         setCacheReady(isStaticCacheAvailable());
       } catch (error) {
         console.error("Failed to initialize database:", error);
@@ -678,20 +732,77 @@ function App() {
 
   const refreshData = async () => {
     try {
-      const [t, r, n, rr, d] = await Promise.all([
+      const [t, r, n, rr, d, sh, tc] = await Promise.all([
         getAllTemplates(),
         getAllRecords(),
         getAllReviewNotes(),
         getAllReleaseReviews(),
-        getAllDefects()
+        getAllDefects(),
+        getAllStatusHistory(),
+        getAllTrainingComments()
       ]);
       setTemplates(t);
       setReviewRecords(r);
       setReviewNotes(n);
       setReleaseReviews(rr);
       setDefects(d);
+      setStatusHistory(sh);
+      setTrainingComments(tc);
     } catch (error) {
       console.error("Failed to refresh data:", error);
+    }
+  };
+
+  const recordStatusChange = async (
+    recordId: string,
+    fromStatus: string,
+    toStatus: string,
+    remark?: string,
+    fieldChanges?: Record<string, { oldValue: string; newValue: string }>
+  ) => {
+    if (fromStatus === toStatus) return;
+    const historyItem: StatusHistoryItem = {
+      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      recordId,
+      fromStatus,
+      toStatus,
+      operatorRole: activeRole as DBUserRole,
+      operatorName: activeRole,
+      changedAt: Date.now(),
+      remark,
+      fieldChanges
+    };
+    try {
+      await addStatusHistory(historyItem);
+      setStatusHistory(prev => {
+        const next = { ...prev };
+        if (!next[recordId]) {
+          next[recordId] = [];
+        }
+        next[recordId] = [historyItem, ...next[recordId]];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to record status history:", error);
+    }
+  };
+
+  const handleTrainingCommentChange = async (recordId: string, comment: string) => {
+    const now = Date.now();
+    const existing = trainingComments[recordId];
+    const newComment: TrainingComment = {
+      id: existing?.id || `tc-${now}`,
+      recordId,
+      comment,
+      trainer: activeRole,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    try {
+      await saveTrainingComment(newComment);
+      setTrainingComments(prev => ({ ...prev, [recordId]: newComment }));
+    } catch (error) {
+      console.error("Failed to save training comment:", error);
     }
   };
 
@@ -758,7 +869,8 @@ function App() {
 
   const globalMetrics = useMemo(() => getGlobalMetrics(), []);
   const globalFilters = useMemo(() => getGlobalFilters(), []);
-  const activeMetrics = currentWorkflowConfig?.metrics ?? globalMetrics;
+  const baseMetrics = currentWorkflowConfig?.metrics ?? globalMetrics;
+  const activeMetrics = useMemo(() => getRoleSpecificMetrics(baseMetrics, activeRole), [baseMetrics, activeRole]);
   const activeFilters = currentWorkflowConfig?.filters ?? globalFilters;
 
   const allowedStatusOptions = useMemo(() => {
@@ -807,19 +919,7 @@ function App() {
   };
 
   const getVisibleFields = (config: WorkflowConfig | undefined): FieldConfig[] => {
-    if (!config) {
-      return [
-        { key: "aircraftType", label: "机型", type: "select", required: true, options: availableAircraftTypes, placeholder: "选择机型" },
-        { key: "ataChapter", label: "ATA章节", type: "select", required: true, options: availableAtaChapters, placeholder: "选择ATA章节" },
-        { key: "checkArea", label: "检查区域", type: "select", required: true, options: availableCheckAreas, placeholder: "选择检查区域" },
-        { key: "checkItem", label: "检查项目", type: "text", required: false, placeholder: "填写检查项目" },
-        { key: "status", label: "状态", type: "text", required: true, placeholder: "选择状态" },
-        { key: "defectDesc", label: "缺陷描述", type: "text", required: false, placeholder: "填写缺陷描述" },
-        { key: "handling", label: "处理意见", type: "text", required: false, placeholder: "填写处理意见" },
-        { key: "signer", label: "签署人", type: "text", required: false, placeholder: "填写签署人", fullWidth: true }
-      ];
-    }
-    return config.fields;
+    return getRoleVisibleFields(config, activeRole);
   };
 
   const filteredRecords = useMemo(() => {
@@ -846,12 +946,35 @@ function App() {
           value: total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "0%"
         };
       }
+      if (metric.key === "myRecords") {
+        return { ...metric, value: String(reviewRecords.length) };
+      }
+      if (metric.key === "reviewedToday") {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayReviewed = Object.values(releaseReviews).filter(
+          r => r.reviewedAt >= todayStart.getTime()
+        ).length;
+        return { ...metric, value: String(todayReviewed) };
+      }
+      if (metric.key === "commented") {
+        const commentedCount = Object.values(trainingComments).filter(
+          c => c.comment && c.comment.trim().length > 0
+        ).length;
+        return { ...metric, value: String(commentedCount) };
+      }
+      if (metric.key === "pendingComment") {
+        const pendingCount = reviewRecords.filter(
+          r => !trainingComments[r.id] || !trainingComments[r.id].comment?.trim()
+        ).length;
+        return { ...metric, value: String(pendingCount) };
+      }
       return {
         ...metric,
         value: calculateMetricValue(metric, reviewRecords, defects, releaseReviews)
       };
     });
-  }, [activeMetrics, reviewRecords, releaseReviews, defects]);
+  }, [activeMetrics, reviewRecords, releaseReviews, defects, trainingComments]);
 
   const reviewStats = useMemo(() => {
     const total = filteredRecords.length;
@@ -885,9 +1008,10 @@ function App() {
 
   const handleReleaseReview = async (recordId: string, status: "passed" | "rejected") => {
     const record = reviewRecords.find(r => r.id === recordId);
+    if (!record) return;
     const opinion = releaseOpinions[recordId] || "";
     
-    if (record?.status.includes("缺陷") && opinion.trim() === "") {
+    if (record.status.includes("缺陷") && opinion.trim() === "") {
       alert("缺陷项必须填写复核意见！请说明处置理由。");
       return;
     }
@@ -902,6 +1026,20 @@ function App() {
     try {
       await saveReleaseReview(review);
       setReleaseReviews(prev => ({ ...prev, [recordId]: review }));
+      
+      const newStatus = status === "passed" ? "正常" : "待复核";
+      if (record.status !== newStatus) {
+        const updatedRecord = { ...record, status: newStatus, handling: opinion || record.handling };
+        await updateRecord(updatedRecord);
+        setReviewRecords(prev => prev.map(r => r.id === recordId ? updatedRecord : r));
+        await recordStatusChange(
+          recordId,
+          record.status,
+          newStatus,
+          status === "passed" ? `放行通过：${opinion || "无意见"}` : `驳回需返工：${opinion || "无意见"}`
+        );
+      }
+      
       setReleaseOpinions(prev => {
         const next = { ...prev };
         delete next[recordId];
@@ -1271,6 +1409,7 @@ function App() {
     try {
       await addRecord(newRecord);
       setReviewRecords(prev => [...prev, newRecord]);
+      await recordStatusChange(newRecord.id, "新建", formValues.status, `${activeRole}提交检查记录`);
       setFormValues({ ...emptyForm, status: getInitialStatus(config) });
     } catch (error) {
       console.error("Failed to add record:", error);
@@ -1770,14 +1909,17 @@ function App() {
       <section className="workspace">
         <aside className="panel narrow">
           <h2>角色</h2>
-          <div className="chips">
+          <div className="chips role-chips">
             {project.users.map((user: UserRole) => (
               <button
                 key={user}
                 className={activeRole === user ? "chip-active" : ""}
                 onClick={() => setActiveRole(user)}
               >
-                {user}
+                <span className="role-name">{user}</span>
+                {activeRole === user && (
+                  <span className="role-desc">{getRoleDescription(user)}</span>
+                )}
               </button>
             ))}
           </div>
@@ -1809,8 +1951,17 @@ function App() {
               {currentWorkflowConfig && (
                 <p className="workflow-info">当前流程：{currentWorkflowConfig.displayName}</p>
               )}
+              <p className="workflow-info">
+                当前角色：<strong>{activeRole}</strong>
+                {!canRolePerformAction(currentWorkflowConfig, activeRole, "edit")
+                  ? "（只读模式，无法编辑字段"
+                  : `（可编辑字段：${getRoleEditableFields(currentWorkflowConfig, activeRole).join("、") || "无"}`
+              }
+              </p>
             </div>
-            <button className="primary-action" onClick={handleAddRecord}>新增记录</button>
+            {canRolePerformAction(currentWorkflowConfig, activeRole, "create") && (
+              <button className="primary-action" onClick={handleAddRecord}>新增记录</button>
+            )}
           </div>
           <div className="field-grid">
             {getVisibleFields(currentWorkflowConfig).map(field => {
@@ -1953,6 +2104,11 @@ function App() {
                       onOpinionChange={handleReleaseOpinionChange}
                       onReview={handleReleaseReview}
                       recordType="normal"
+                      history={statusHistory[record.id]}
+                      showHistory={activeHistoryRecordId === record.id}
+                      onToggleHistory={(id) => setActiveHistoryRecordId(
+                        activeHistoryRecordId === id ? null : id
+                      )}
                     />
                   ))
                 )}
@@ -1980,6 +2136,11 @@ function App() {
                       onOpinionChange={handleReleaseOpinionChange}
                       onReview={handleReleaseReview}
                       recordType="pending"
+                      history={statusHistory[record.id]}
+                      showHistory={activeHistoryRecordId === record.id}
+                      onToggleHistory={(id) => setActiveHistoryRecordId(
+                        activeHistoryRecordId === id ? null : id
+                      )}
                     />
                   ))
                 )}
@@ -2007,6 +2168,11 @@ function App() {
                       onOpinionChange={handleReleaseOpinionChange}
                       onReview={handleReleaseReview}
                       recordType="defect"
+                      history={statusHistory[record.id]}
+                      showHistory={activeHistoryRecordId === record.id}
+                      onToggleHistory={(id) => setActiveHistoryRecordId(
+                        activeHistoryRecordId === id ? null : id
+                      )}
                     />
                   ))
                 )}
@@ -2020,10 +2186,11 @@ function App() {
             <div>
               <p>培训讲评</p>
               <h2>检查讲评视图</h2>
+              <p className="workflow-info">{getRoleDescription(activeRole)}</p>
             </div>
             <div className="review-actions">
               <button className="review-summary-btn">
-                讲评进度 {reviewStats.commented}/{reviewStats.total}
+                讲评进度 {Object.values(trainingComments).filter(c => c.comment?.trim()).length}/{reviewStats.total}
               </button>
             </div>
           </div>
@@ -2047,7 +2214,11 @@ function App() {
             </div>
             <div className="review-metric review-metric-primary">
               <span>已讲评</span>
-              <strong>{reviewStats.commented}</strong>
+              <strong>{Object.values(trainingComments).filter(c => c.comment?.trim()).length}</strong>
+            </div>
+            <div className="review-metric review-metric-watch">
+              <span>待讲评</span>
+              <strong>{reviewRecords.length - Object.values(trainingComments).filter(c => c.comment?.trim()).length}</strong>
             </div>
           </div>
 
@@ -2057,50 +2228,123 @@ function App() {
                 <p>暂无符合筛选条件的记录</p>
               </div>
             ) : (
-              filteredRecords.map((record, index) => (
-                <article key={record.id} className="review-card">
-                  <div className="review-card-header">
-                    <div className="review-card-index">{String(index + 1).padStart(2, "0")}</div>
-                    <div className="review-card-title">
-                      <div className="review-card-top">
-                        <h3>{record.aircraftType}</h3>
-                        <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
-                          {record.status}
-                        </span>
-                      </div>
-                      <div className="review-card-meta">
-                        <span className="meta-tag">{record.ataChapter}</span>
-                        <span className="meta-tag meta-tag-muted">{record.checkArea}</span>
+              filteredRecords.map((record, index) => {
+                const recordHistory = statusHistory[record.id] || [];
+                const commentData = trainingComments[record.id];
+                const releaseReview = releaseReviews[record.id];
+                return (
+                  <article key={record.id} className="review-card">
+                    <div className="review-card-header">
+                      <div className="review-card-index">{String(index + 1).padStart(2, "0")}</div>
+                      <div className="review-card-title">
+                        <div className="review-card-top">
+                          <h3>{record.aircraftType}</h3>
+                          <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+                            {record.status}
+                          </span>
+                          <button
+                            className="history-btn"
+                            onClick={() => setActiveHistoryRecordId(
+                              activeHistoryRecordId === record.id ? null : record.id
+                            )}
+                          >
+                            📋 状态历史 ({recordHistory.length})
+                          </button>
+                        </div>
+                        <div className="review-card-meta">
+                          <span className="meta-tag">{record.ataChapter}</span>
+                          <span className="meta-tag meta-tag-muted">{record.checkArea}</span>
+                          {record.checkItem && <span className="meta-tag meta-tag-muted">{record.checkItem}</span>}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="review-card-body">
-                    <div className="defect-section">
-                      <div className="section-label">缺陷说明</div>
-                      <div className="defect-content">
-                        {record.defectDesc ? record.defectDesc : "无缺陷描述"}
+                    {activeHistoryRecordId === record.id && recordHistory.length > 0 && (
+                      <div className="history-timeline">
+                        <div className="section-label">状态变更历史</div>
+                        {recordHistory.map((item, hIdx) => (
+                          <div key={item.id} className="history-timeline-item">
+                            <div className="history-dot"></div>
+                            <div className="history-content">
+                              <div className="history-header">
+                                <span className="history-status-from">{item.fromStatus}</span>
+                                <span className="history-arrow">→</span>
+                                <span className="history-status-to">{item.toStatus}</span>
+                                <span className="history-operator">
+                                  {item.operatorRole}
+                                </span>
+                                <span className="history-time">
+                                  {new Date(item.changedAt).toLocaleString("zh-CN", {
+                                    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                                  })}
+                                </span>
+                              </div>
+                              {item.remark && (
+                                <div className="history-remark">{item.remark}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
+                    )}
 
-                    <div className="comment-section">
-                      <div className="section-label">
-                        讲评备注
-                        {reviewNotes[record.id]?.trim().length > 0 && (
-                          <span className="comment-indicator">已填写</span>
-                        )}
+                    <div className="review-card-body">
+                      {record.handling && (
+                        <div className="handling-section">
+                          <div className="section-label">处理意见</div>
+                          <div className="handling-content">{record.handling}</div>
+                        </div>
+                      )}
+                      <div className="defect-section">
+                        <div className="section-label">缺陷说明</div>
+                        <div className="defect-content">
+                          {record.defectDesc ? record.defectDesc : "无缺陷描述"}
+                        </div>
                       </div>
-                      <textarea
-                        className="comment-textarea"
-                        placeholder="请输入培训讲评意见，例如：针对该缺陷的处置要点、常见问题、注意事项..."
-                        rows={3}
-                        value={reviewNotes[record.id] || ""}
-                        onChange={e => handleReviewNoteChange(record.id, e.target.value)}
-                      />
+
+                      {releaseReview && (
+                        <div className="release-review-section">
+                          <div className="section-label">
+                            放行复核
+                            <span className="reviewer-info">
+                              {releaseReview.reviewer} · {new Date(releaseReview.reviewedAt).toLocaleString("zh-CN", {
+                                month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                              })}
+                            </span>
+                          </div>
+                          <div className={`review-result-display ${releaseReview.status}`}>
+                            <strong>{releaseReview.status === "passed" ? "✅ 通过" : "❌ 驳回"}</strong>
+                            {releaseReview.opinion && <p>{releaseReview.opinion}</p>}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="comment-section">
+                        <div className="section-label">
+                          培训讲评备注
+                          {commentData?.comment?.trim().length > 0 && (
+                            <span className="comment-indicator">已填写</span>
+                          )}
+                          {commentData?.updatedAt && (
+                            <span className="reviewer-info">
+                              最后更新：{new Date(commentData.updatedAt).toLocaleString("zh-CN", {
+                                month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                              })}
+                            </span>
+                          )}
+                        </div>
+                        <textarea
+                          className="comment-textarea"
+                          placeholder="请输入培训讲评意见，例如：针对该缺陷的处置要点、常见问题、注意事项、改进建议..."
+                          rows={4}
+                          value={commentData?.comment || ""}
+                          onChange={e => handleTrainingCommentChange(record.id, e.target.value)}
+                        />
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))
+                  </article>
+                );
+              })
             )}
           </div>
         </section>
@@ -2225,19 +2469,35 @@ function App() {
                       .filter(field => field.label !== "机型");
                     const hasDefect = canCreateDefect(recordConfig, activeRole, record.status);
                     const defectExists = !!Object.values(defects).find(d => d.sourceRecordId === record.id);
+                    const recordHistory = statusHistory[record.id] || [];
+                    const isExpanded = activeHistoryRecordId === record.id;
+                    const releaseReview = releaseReviews[record.id];
                     return (
                       <article key={record.id} className="record-card">
                         <div className={`record-index ${hasDefect ? "record-index-defect" : ""}`}>
                           {String(index + 1).padStart(2, "0")}
                         </div>
                         <div className="record-content">
-                          <h3>{record.aircraftType}</h3>
+                          <div className="record-header-row">
+                            <h3>{record.aircraftType}</h3>
+                            <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+                              {record.status}
+                            </span>
+                            <button
+                              className="history-btn history-btn-sm"
+                              onClick={() => setActiveHistoryRecordId(
+                                activeHistoryRecordId === record.id ? null : record.id
+                              )}
+                            >
+                              📋 ({recordHistory.length})
+                            </button>
+                          </div>
                           <p>
                             {displayFields.map(field => `${field.label}：${field.value}`).join(" · ")}
                           </p>
                         </div>
-                        {hasDefect && (
-                          <div className="record-actions">
+                        <div className="record-actions">
+                          {hasDefect && (
                             <button
                               className="generate-defect-btn"
                               onClick={() => handleGenerateDefectFromRecord(record)}
@@ -2245,6 +2505,65 @@ function App() {
                             >
                               {defectExists ? "已加入清单" : "生成缺陷"}
                             </button>
+                          )}
+                        </div>
+                        {isExpanded && (
+                          <div className="record-expanded">
+                            {recordHistory.length > 0 && (
+                              <div className="history-timeline">
+                                <div className="section-label">状态变更历史</div>
+                                {recordHistory.map((item) => (
+                                  <div key={item.id} className="history-timeline-item">
+                                    <div className="history-dot"></div>
+                                    <div className="history-content">
+                                      <div className="history-header">
+                                        <span className="history-status-from">{item.fromStatus}</span>
+                                        <span className="history-arrow">→</span>
+                                        <span className="history-status-to">{item.toStatus}</span>
+                                        <span className="history-operator">{item.operatorRole}</span>
+                                        <span className="history-time">
+                                          {new Date(item.changedAt).toLocaleString("zh-CN", {
+                                            month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                                          })}
+                                        </span>
+                                      </div>
+                                      {item.remark && <div className="history-remark">{item.remark}</div>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {releaseReview && (
+                              <div className="release-review-section">
+                                <div className="section-label">
+                                  放行复核
+                                  <span className="reviewer-info">
+                                    {releaseReview.reviewer} · {new Date(releaseReview.reviewedAt).toLocaleString("zh-CN", {
+                                      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                                    })}
+                                  </span>
+                                </div>
+                                <div className={`review-result-display ${releaseReview.status}`}>
+                                  <strong>{releaseReview.status === "passed" ? "✅ 通过" : "❌ 驳回"}</strong>
+                                  {releaseReview.opinion && <p>{releaseReview.opinion}</p>}
+                                </div>
+                              </div>
+                            )}
+                            {trainingComments[record.id]?.comment && (
+                              <div className="comment-section">
+                                <div className="section-label">
+                                  培训讲评
+                                  <span className="reviewer-info">
+                                    {trainingComments[record.id].trainer} · {new Date(trainingComments[record.id].updatedAt).toLocaleString("zh-CN", {
+                                      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                                    })}
+                                  </span>
+                                </div>
+                                <div className="comment-display">
+                                  {trainingComments[record.id].comment}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                       </article>

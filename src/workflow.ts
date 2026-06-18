@@ -374,3 +374,135 @@ export function getInitialStatus(config: WorkflowConfig | undefined): string {
   if (!config) return "待复核";
   return config.initialStatus;
 }
+
+export function getRoleVisibleFields(
+  config: WorkflowConfig | undefined,
+  role: UserRole
+): FieldConfig[] {
+  if (!config) {
+    const defaultFields: FieldConfig[] = [
+      { key: "aircraftType", label: "机型", type: "select", required: true, placeholder: "选择机型" },
+      { key: "ataChapter", label: "ATA章节", type: "select", required: true, placeholder: "选择ATA章节" },
+      { key: "checkArea", label: "检查区域", type: "select", required: true, placeholder: "选择检查区域" },
+      { key: "checkItem", label: "检查项目", type: "text", required: false, placeholder: "填写检查项目" },
+      { key: "status", label: "状态", type: "text", required: true, placeholder: "选择状态" },
+      { key: "defectDesc", label: "缺陷描述", type: "text", required: false, placeholder: "填写缺陷描述" },
+      { key: "handling", label: "处理意见", type: "text", required: false, placeholder: "填写处理意见" }
+    ];
+    if (role === "放行人员") {
+      defaultFields.push({ key: "signer", label: "签署人", type: "text", required: false, placeholder: "填写签署人", fullWidth: true });
+    }
+    return defaultFields;
+  }
+
+  const permissions = config.rolePermissions[role];
+  if (!permissions?.canView) return [];
+
+  if (role === "培训教员") {
+    return config.fields.filter(f =>
+      f.key !== "signer" || true
+    );
+  }
+
+  return config.fields;
+}
+
+export function canRolePerformAction(
+  config: WorkflowConfig | undefined,
+  role: UserRole,
+  action: "create" | "edit" | "review" | "createDefect" | "addComment"
+): boolean {
+  if (action === "addComment") {
+    return role === "培训教员";
+  }
+  if (!config) {
+    switch (role) {
+      case "维修工程师":
+        return action === "create" || action === "edit" || action === "createDefect";
+      case "放行人员":
+        return action === "review" || action === "edit" || action === "createDefect";
+      case "培训教员":
+        return action === "addComment";
+      default:
+        return false;
+    }
+  }
+  const permissions = config.rolePermissions[role];
+  if (!permissions) return false;
+  switch (action) {
+    case "create":
+      return permissions.canEdit.length > 0;
+    case "edit":
+      return permissions.canEdit.length > 0;
+    case "review":
+      return !!permissions.canReview;
+    case "createDefect":
+      return !!permissions.canCreateDefect;
+    default:
+      return false;
+  }
+}
+
+export function getRoleEditableFields(
+  config: WorkflowConfig | undefined,
+  role: UserRole
+): string[] {
+  if (!config) {
+    switch (role) {
+      case "维修工程师":
+        return ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling", "status"];
+      case "放行人员":
+        return ["status", "handling", "signer"];
+      case "培训教员":
+        return [];
+      default:
+        return [];
+    }
+  }
+  const permissions = config.rolePermissions[role];
+  return permissions?.canEdit || [];
+}
+
+export function getRoleSpecificMetrics(
+  baseMetrics: MetricConfig[],
+  role: UserRole
+): MetricConfig[] {
+  switch (role) {
+    case "维修工程师":
+      return [
+        { key: "myRecords", label: "我的提交", type: "count" as const, source: "records" as const, colorIndex: 0 },
+        baseMetrics.find(m => m.key === "pendingReview") || { key: "pendingReview", label: "待复核", type: "count" as const, source: "records" as const, filter: { status: ["待复核"] }, colorIndex: 1 },
+        baseMetrics.find(m => m.key === "defectCount") || { key: "defectCount", label: "缺陷项", type: "count" as const, source: "records" as const, filter: { status: ["缺陷"] }, colorIndex: 2 },
+        baseMetrics.find(m => m.key === "pendingDefects") || { key: "pendingDefects", label: "处理中缺陷", type: "count" as const, source: "defects" as const, filter: { status: ["processing"] }, colorIndex: 1 }
+      ];
+    case "放行人员":
+      return [
+        baseMetrics.find(m => m.key === "completionRate") || { key: "completionRate", label: "放行通过率", type: "percentage" as const, source: "records" as const, filter: { status: ["正常"] }, colorIndex: 0 },
+        baseMetrics.find(m => m.key === "pendingReview") || { key: "pendingReview", label: "待复核", type: "count" as const, source: "records" as const, filter: { status: ["待复核"] }, colorIndex: 1 },
+        baseMetrics.find(m => m.key === "defectCount") || { key: "defectCount", label: "缺陷项", type: "count" as const, source: "records" as const, filter: { status: ["缺陷"] }, colorIndex: 2 },
+        { key: "reviewedToday", label: "今日复核", type: "count" as const, source: "reviews" as const, colorIndex: 0 }
+      ];
+    case "培训教员":
+      return [
+        baseMetrics.find(m => m.key === "completionRate") || { key: "completionRate", label: "整体完成率", type: "percentage" as const, source: "records" as const, filter: { status: ["正常"] }, colorIndex: 0 },
+        baseMetrics.find(m => m.key === "defectCount") || { key: "defectCount", label: "缺陷项", type: "count" as const, source: "records" as const, filter: { status: ["缺陷"] }, colorIndex: 2 },
+        { key: "commented", label: "已讲评", type: "count" as const, source: "records" as const, colorIndex: 0 },
+        { key: "pendingComment", label: "待讲评", type: "count" as const, source: "records" as const, colorIndex: 1 }
+      ];
+    default:
+      return baseMetrics;
+  }
+}
+
+export function getRoleDescription(role: UserRole): string {
+  switch (role) {
+    case "维修工程师":
+      return "负责提交检查记录、标记缺陷、处理缺陷项";
+    case "放行人员":
+      return "负责复核检查记录、签署放行意见、确认缺陷处置";
+    case "培训教员":
+      return "负责查看所有记录、填写培训讲评备注";
+    default:
+      return "";
+  }
+}
