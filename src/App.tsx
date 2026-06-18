@@ -659,6 +659,22 @@ function App() {
   });
   const [activeRole, setActiveRole] = useState<UserRole>("维修工程师");
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
+
+  interface RecordFilterState {
+    aircraftType: string;
+    ataChapter: string;
+    status: string;
+    hasReleaseReview: "" | "yes" | "no";
+  }
+
+  const emptyRecordFilter: RecordFilterState = {
+    aircraftType: "",
+    ataChapter: "",
+    status: "",
+    hasReleaseReview: ""
+  };
+
+  const [recordFilters, setRecordFilters] = useState<RecordFilterState>(emptyRecordFilter);
   const [isExportPreviewOpen, setIsExportPreviewOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "failed">("idle");
   const [isMatrixDetailOpen, setIsMatrixDetailOpen] = useState(false);
@@ -900,6 +916,30 @@ function App() {
     }
   }, [activeFilter, activeFilters]);
 
+  useEffect(() => {
+    setRecordFilters(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (next.aircraftType && !availableAircraftTypeOptions.includes(next.aircraftType)) {
+        next.aircraftType = "";
+        changed = true;
+      }
+
+      if (next.ataChapter && !availableAtaChapterOptions.includes(next.ataChapter)) {
+        next.ataChapter = "";
+        changed = true;
+      }
+
+      if (next.status && !availableStatusOptions.includes(next.status)) {
+        next.status = "";
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [availableAircraftTypeOptions, availableAtaChapterOptions, availableStatusOptions]);
+
   const getFormFieldValue = (key: string): string => {
     const formAny = formValues as any;
     return formAny[key] || "";
@@ -923,15 +963,74 @@ function App() {
     return getRoleVisibleFields(config, activeRole);
   };
 
+  const availableAircraftTypeOptions = useMemo(() => {
+    const types = new Set<string>();
+    reviewRecords.forEach(r => types.add(r.aircraftType));
+    return Array.from(types).sort();
+  }, [reviewRecords]);
+
+  const availableAtaChapterOptions = useMemo(() => {
+    const chapters = new Set<string>();
+    reviewRecords
+      .filter(r => !recordFilters.aircraftType || r.aircraftType === recordFilters.aircraftType)
+      .forEach(r => chapters.add(r.ataChapter));
+    return Array.from(chapters).sort();
+  }, [reviewRecords, recordFilters.aircraftType]);
+
+  const availableStatusOptions = useMemo(() => {
+    const statuses = new Set<string>();
+    reviewRecords.forEach(r => statuses.add(r.status));
+    return Array.from(statuses).sort();
+  }, [reviewRecords]);
+
   const filteredRecords = useMemo(() => {
-    if (!activeFilter) return reviewRecords;
-    const selectedFilter = activeFilters.find(filter => filter.key === activeFilter);
-    if (!selectedFilter) return reviewRecords;
-    return reviewRecords.filter(record => {
-      const value = String((record as any)[selectedFilter.matchField] ?? "");
-      return value === selectedFilter.label;
+    let result = reviewRecords;
+
+    if (activeFilter) {
+      const selectedFilter = activeFilters.find(filter => filter.key === activeFilter);
+      if (selectedFilter) {
+        result = result.filter(record => {
+          const value = String((record as any)[selectedFilter.matchField] ?? "");
+          return value === selectedFilter.label;
+        });
+      }
+    }
+
+    if (recordFilters.aircraftType) {
+      result = result.filter(r => r.aircraftType === recordFilters.aircraftType);
+    }
+
+    if (recordFilters.ataChapter) {
+      result = result.filter(r => r.ataChapter === recordFilters.ataChapter);
+    }
+
+    if (recordFilters.status) {
+      result = result.filter(r => r.status === recordFilters.status);
+    }
+
+    if (recordFilters.hasReleaseReview === "yes") {
+      result = result.filter(r => !!releaseReviews[r.id]);
+    } else if (recordFilters.hasReleaseReview === "no") {
+      result = result.filter(r => !releaseReviews[r.id]);
+    }
+
+    return result;
+  }, [reviewRecords, activeFilter, activeFilters, recordFilters, releaseReviews]);
+
+  const handleRecordFilterChange = (key: keyof RecordFilterState, value: string) => {
+    setRecordFilters(prev => {
+      const next = { ...prev, [key]: value };
+      if (key === "aircraftType") {
+        next.ataChapter = "";
+      }
+      return next;
     });
-  }, [reviewRecords, activeFilter, activeFilters]);
+  };
+
+  const resetRecordFilters = () => {
+    setRecordFilters(emptyRecordFilter);
+    setActiveFilter(null);
+  };
 
   const metricValues = useMemo(() => {
     return activeMetrics.map(metric => {
@@ -1987,6 +2086,64 @@ function App() {
               </button>
             ))}
           </div>
+          <div className="advanced-filters">
+            <h3 className="advanced-filters-title">组合筛选</h3>
+            <label className="advanced-filter-item">
+              <span>机型</span>
+              <select
+                value={recordFilters.aircraftType}
+                onChange={e => handleRecordFilterChange("aircraftType", e.target.value)}
+              >
+                <option value="">全部机型</option>
+                {availableAircraftTypeOptions.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </label>
+            <label className="advanced-filter-item">
+              <span>ATA章节</span>
+              <select
+                value={recordFilters.ataChapter}
+                onChange={e => handleRecordFilterChange("ataChapter", e.target.value)}
+                disabled={!recordFilters.ataChapter && availableAtaChapterOptions.length === 0}
+              >
+                <option value="">全部章节</option>
+                {availableAtaChapterOptions.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+            <label className="advanced-filter-item">
+              <span>状态</span>
+              <select
+                value={recordFilters.status}
+                onChange={e => handleRecordFilterChange("status", e.target.value)}
+              >
+                <option value="">全部状态</option>
+                {availableStatusOptions.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </label>
+            <label className="advanced-filter-item">
+              <span>放行复核</span>
+              <select
+                value={recordFilters.hasReleaseReview}
+                onChange={e => handleRecordFilterChange("hasReleaseReview", e.target.value)}
+              >
+                <option value="">全部</option>
+                <option value="yes">已有复核</option>
+                <option value="no">待复核</option>
+              </select>
+            </label>
+            <button
+              className="reset-filters-btn"
+              onClick={resetRecordFilters}
+              disabled={activeFilter === null && recordFilters.aircraftType === "" && recordFilters.ataChapter === "" && recordFilters.status === "" && recordFilters.hasReleaseReview === ""}
+            >
+              重置筛选
+            </button>
+          </div>
         </aside>
 
         <section className="panel">
@@ -2240,7 +2397,7 @@ function App() {
             </div>
             <div className="review-actions">
               <button className="review-summary-btn">
-                讲评进度 {Object.values(trainingComments).filter(c => c.comment?.trim()).length}/{reviewStats.total}
+                讲评进度 {filteredRecords.filter(r => trainingComments[r.id]?.comment?.trim()).length}/{reviewStats.total}
               </button>
             </div>
           </div>
@@ -2264,11 +2421,11 @@ function App() {
             </div>
             <div className="review-metric review-metric-primary">
               <span>已讲评</span>
-              <strong>{Object.values(trainingComments).filter(c => c.comment?.trim()).length}</strong>
+              <strong>{filteredRecords.filter(r => trainingComments[r.id]?.comment?.trim()).length}</strong>
             </div>
             <div className="review-metric review-metric-watch">
               <span>待讲评</span>
-              <strong>{reviewRecords.length - Object.values(trainingComments).filter(c => c.comment?.trim()).length}</strong>
+              <strong>{filteredRecords.length - filteredRecords.filter(r => trainingComments[r.id]?.comment?.trim()).length}</strong>
             </div>
           </div>
 
