@@ -81,7 +81,10 @@ import {
   getLastSyncTime,
   isStaticCacheAvailable,
   getOperationLabel,
+  getOperationSummary,
   clearSyncedOperations,
+  removeFromQueue,
+  retryOperation,
   getSWStatusText,
   getCacheInfo,
   clearCache,
@@ -797,8 +800,10 @@ function App() {
   const [cacheReady, setCacheReady] = useState(false);
   const [swStatus, setSwStatus] = useState<SWStatus | null>(null);
   const [showCachePanel, setShowCachePanel] = useState(false);
+  const [offlineSaveToast, setOfflineSaveToast] = useState<string | null>(null);
   const prevNetworkRef = useRef<NetworkStatus>(navigator.onLine ? "online" : "offline");
   const toastTimerRef = useRef<number | null>(null);
+  const offlineToastTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -1254,6 +1259,9 @@ function App() {
     setReviewNotes(prev => ({ ...prev, [recordId]: value }));
     try {
       await saveReviewNote(recordId, value);
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("讲评备注已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to save review note:", error);
     }
@@ -1456,6 +1464,9 @@ function App() {
     try {
       await updateDefect(updatedDefect);
       setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to update defect:", error);
     }
@@ -1512,6 +1523,9 @@ function App() {
     try {
       await updateDefect(updatedDefect);
       setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to start processing defect:", error);
     }
@@ -1544,6 +1558,9 @@ function App() {
         delete next[defectId];
         return next;
       });
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to complete defect:", error);
     }
@@ -1581,6 +1598,9 @@ function App() {
         delete next[defectId];
         return next;
       });
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to reject defect:", error);
     }
@@ -1608,6 +1628,9 @@ function App() {
     try {
       await updateDefect(updatedDefect);
       setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
     } catch (error) {
       console.error("Failed to reopen defect:", error);
     }
@@ -1919,6 +1942,9 @@ function App() {
       await addRecord(newRecord);
       setReviewRecords(prev => [...prev, newRecord]);
       await recordStatusChange(newRecord.id, "新建", formValues.status, `${activeRole}提交检查记录`);
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("新增记录已暂存本地");
+      }
       setFormValues({ ...emptyForm, status: getInitialStatus(config) });
     } catch (error) {
       console.error("Failed to add record:", error);
@@ -2120,6 +2146,28 @@ function App() {
 
   const pendingCount = getPendingSyncCount();
   const lastSync = getLastSyncTime();
+  const failedCount = syncQueue.filter(op => !op.synced && op.error).length;
+  const waitingCount = syncQueue.filter(op => !op.synced && !op.error).length;
+
+  const showOfflineSaveToast = (label: string) => {
+    setOfflineSaveToast(label);
+    if (offlineToastTimerRef.current) window.clearTimeout(offlineToastTimerRef.current);
+    offlineToastTimerRef.current = window.setTimeout(() => setOfflineSaveToast(null), 2500);
+  };
+
+  const handleRetryOperation = (opId: string) => {
+    if (networkStatus === "offline") {
+      alert("当前处于离线状态，无法重试。请恢复网络后再操作。");
+      return;
+    }
+    retryOperation(opId);
+  };
+
+  const handleDiscardOperation = (opId: string) => {
+    const confirmed = window.confirm("确认丢弃该操作？丢弃后数据将仅保留在本地，不会再尝试同步。");
+    if (!confirmed) return;
+    removeFromQueue(opId);
+  };
 
   const handleManualSync = async () => {
     if (networkStatus === "offline") {
@@ -2166,6 +2214,18 @@ function App() {
               ) : (
                 <span>所有数据已保持最新</span>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {offlineSaveToast && networkStatus === "offline" && (
+        <div className="offline-save-toast">
+          <div className="toast-content">
+            <span className="toast-icon">💾</span>
+            <div>
+              <strong>{offlineSaveToast}</strong>
+              <span>网络恢复后将自动同步</span>
             </div>
           </div>
         </div>
@@ -2220,25 +2280,30 @@ function App() {
                   🚀 立即更新
                 </button>
               )}
-              {pendingCount > 0 && (
+              {(pendingCount > 0 || failedCount > 0) && (
                 <button
-                  className={`sync-pending-button ${syncStatus === "syncing" ? "syncing" : ""}`}
+                  className={`sync-pending-button ${syncStatus === "syncing" ? "syncing" : ""} ${failedCount > 0 ? "has-failed" : ""}`}
                   onClick={() => setShowSyncPanel(!showSyncPanel)}
                 >
-                  {syncStatus === "syncing" ? (
+                  {syncStatus === "syncing" && networkStatus === "online" ? (
                     <>
                       <span className="sync-spinner"></span>
                       <span>同步中...</span>
                     </>
-                  ) : syncStatus === "synced" ? (
+                  ) : failedCount > 0 ? (
                     <>
-                      <span className="sync-check">✓</span>
-                      <span>同步完成</span>
+                      <span className="sync-error">⚠</span>
+                      <span>{failedCount} 条失败</span>
                     </>
                   ) : syncStatus === "error" ? (
                     <>
                       <span className="sync-error">⚠</span>
                       <span>同步异常</span>
+                    </>
+                  ) : syncStatus === "synced" && networkStatus === "online" ? (
+                    <>
+                      <span className="sync-check">✓</span>
+                      <span>同步完成</span>
                     </>
                   ) : (
                     <>
@@ -2329,27 +2394,47 @@ function App() {
             </div>
           )}
 
-          {showSyncPanel && pendingCount > 0 && (
+          {showSyncPanel && (pendingCount > 0 || failedCount > 0) && (
             <div className="sync-panel">
               <div className="sync-panel-header">
-                <h3>待同步操作队列</h3>
-                <span className="sync-panel-count">共 {pendingCount} 条</span>
+                <h3>离线同步队列</h3>
+                <div className="sync-panel-header-stats">
+                  {waitingCount > 0 && <span className="sync-panel-stat waiting">等待 {waitingCount}</span>}
+                  {failedCount > 0 && <span className="sync-panel-stat failed">失败 {failedCount}</span>}
+                </div>
               </div>
               <div className="sync-panel-list">
                 {syncQueue.filter(op => !op.synced).map(op => (
-                  <div key={op.id} className="sync-panel-item">
+                  <div key={op.id} className={`sync-panel-item ${op.error ? "sync-item-failed" : ""}`}>
                     <div className="sync-item-icon">
                       {op.type.includes("add") || op.type.includes("create") ? "+" : op.type.includes("delete") ? "×" : "↻"}
                     </div>
                     <div className="sync-item-info">
                       <div className="sync-item-type">{getOperationLabel(op.type)}</div>
+                      <div className="sync-item-summary">{getOperationSummary(op)}</div>
                       <div className="sync-item-time">
-                        入队时间：{new Date(op.createdAt).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        {new Date(op.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
                       </div>
+                      {op.error && <div className="sync-item-error-detail">{op.error}</div>}
                     </div>
-                    <div className="sync-item-status">
+                    <div className="sync-item-actions">
                       {op.error ? (
-                        <span className="sync-item-error" title={op.error}>⚠ 失败</span>
+                        <>
+                          <button
+                            className="sync-action-btn retry-btn"
+                            onClick={() => handleRetryOperation(op.id)}
+                            title="重试同步"
+                          >
+                            ↻ 重试
+                          </button>
+                          <button
+                            className="sync-action-btn discard-btn"
+                            onClick={() => handleDiscardOperation(op.id)}
+                            title="丢弃操作"
+                          >
+                            ✕ 丢弃
+                          </button>
+                        </>
                       ) : (
                         <span className="sync-item-waiting">等待中</span>
                       )}
@@ -2358,12 +2443,21 @@ function App() {
                 ))}
               </div>
               <div className="sync-panel-footer">
+                {failedCount > 0 && (
+                  <button
+                    className="sync-action-btn discard-all-btn"
+                    onClick={() => {
+                      const confirmed = window.confirm(`确认丢弃全部 ${failedCount} 条失败操作？丢弃后数据仅保留本地。`);
+                      if (!confirmed) return;
+                      syncQueue.filter(op => !op.synced && op.error).forEach(op => removeFromQueue(op.id));
+                    }}
+                  >
+                    清除全部失败
+                  </button>
+                )}
                 <button
                   className="sync-panel-close"
-                  onClick={() => {
-                    clearSyncedOperations();
-                    setShowSyncPanel(false);
-                  }}
+                  onClick={() => setShowSyncPanel(false)}
                 >
                   关闭
                 </button>

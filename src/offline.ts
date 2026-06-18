@@ -311,6 +311,46 @@ export function removeFromQueue(operationId: string): void {
   notifySyncQueue();
 }
 
+export function retryOperation(operationId: string): void {
+  const op = syncQueue.find(o => o.id === operationId);
+  if (!op) return;
+  op.error = undefined;
+  persistSyncQueue();
+  notifySyncQueue();
+  if (currentNetworkStatus === "online") {
+    syncImmediate(op);
+  }
+}
+
+export function getOperationSummary(op: SyncOperation): string {
+  const p = op.payload || {};
+  switch (op.type) {
+    case "addRecord":
+    case "updateRecord":
+    case "deleteRecord":
+      return [p.aircraftType, p.ataChapter, p.checkArea, p.status && `状态:${p.status}`].filter(Boolean).join(" · ") || p.id || "";
+    case "addTemplate":
+    case "updateTemplate":
+    case "deleteTemplate":
+      return [p.name, p.aircraftType, p.ataChapter].filter(Boolean).join(" · ") || p.id || "";
+    case "saveReviewNote":
+      return [p.recordId && `记录:${p.recordId}`, p.note && `备注:${p.note.slice(0, 20)}`].filter(Boolean).join(" · ") || p.recordId || "";
+    case "saveReleaseReview":
+      return [p.recordId && `记录:${p.recordId}`, p.status === "passed" ? "通过" : p.status === "rejected" ? "驳回" : "", p.reviewer].filter(Boolean).join(" · ") || p.recordId || "";
+    case "addDefect":
+    case "updateDefect":
+    case "deleteDefect":
+    case "createDefectFromRecord":
+      return [p.aircraftType, p.ataChapter, p.defectDesc && `缺陷:${(p.defectDesc as string).slice(0, 20)}`, p.status && `状态:${p.status}`].filter(Boolean).join(" · ") || p.id || "";
+    case "addStatusHistory":
+      return [p.recordId && `记录:${p.recordId}`, p.fromStatus && `${p.fromStatus}→${p.toStatus}`].filter(Boolean).join(" · ") || "";
+    case "saveTrainingComment":
+      return [p.recordId && `记录:${p.recordId}`, p.status && `讲评:${p.status}`].filter(Boolean).join(" · ") || p.recordId || "";
+    default:
+      return "";
+  }
+}
+
 export function getLastSyncTime(): number | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY_LAST_SYNC);
