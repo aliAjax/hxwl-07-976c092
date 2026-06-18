@@ -1646,7 +1646,7 @@ textarea {
 
 .defect-metrics {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 12px;
   margin-bottom: 24px;
 }
@@ -1676,6 +1676,24 @@ textarea {
 
 .defect-metric-processing strong {
   color: var(--primary);
+}
+
+.defect-metric-soon {
+  background: color-mix(in srgb, #f59e0b 8%, #fefce8);
+  border-color: color-mix(in srgb, #f59e0b 30%, var(--border));
+}
+
+.defect-metric-soon strong {
+  color: #d97706;
+}
+
+.defect-metric-overdue {
+  background: color-mix(in srgb, #e11d48 8%, #fff1f2);
+  border-color: color-mix(in srgb, #e11d48 30%, var(--border));
+}
+
+.defect-metric-overdue strong {
+  color: #be123c;
 }
 
 .defect-metric-completed strong {
@@ -1719,6 +1737,12 @@ textarea {
 .defect-card-rejected {
   border-color: color-mix(in srgb, #e11d48 30%, var(--border));
   opacity: 0.85;
+}
+
+.defect-card-overdue {
+  border-color: #e11d48;
+  box-shadow: 0 0 0 1px rgba(225, 29, 72, 0.1), 0 4px 14px rgba(225, 29, 72, 0.08);
+  background: #fffafb;
 }
 
 .defect-card-history {
@@ -1814,6 +1838,40 @@ textarea {
   border: 1px solid color-mix(in srgb, #e11d48 25%, transparent);
 }
 
+.defect-priority-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.defect-priority-critical {
+  background: color-mix(in srgb, #dc2626 12%, #ffffff);
+  color: #dc2626;
+  border: 1px solid color-mix(in srgb, #dc2626 25%, transparent);
+}
+
+.defect-priority-high {
+  background: color-mix(in srgb, #ea580c 12%, #ffffff);
+  color: #ea580c;
+  border: 1px solid color-mix(in srgb, #ea580c 25%, transparent);
+}
+
+.defect-priority-medium {
+  background: color-mix(in srgb, #ca8a04 12%, #ffffff);
+  color: #a16207;
+  border: 1px solid color-mix(in srgb, #ca8a04 25%, transparent);
+}
+
+.defect-priority-low {
+  background: color-mix(in srgb, #16a34a 12%, #ffffff);
+  color: #15803d;
+  border: 1px solid color-mix(in srgb, #16a34a 25%, transparent);
+}
+
 .defect-source-tag {
   display: inline-flex;
   align-items: center;
@@ -1836,6 +1894,48 @@ textarea {
   font-size: 12px;
   color: #94a3b8;
   margin-top: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+}
+
+.defect-time-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.defect-time-overdue {
+  background: #fff1f2;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+}
+
+.defect-time-soon {
+  background: #fefce8;
+  color: #a16207;
+  border: 1px solid #fde68a;
+}
+
+.defect-time-normal {
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.defect-time-none {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+}
+
+.defect-expected-time {
+  color: #64748b;
 }
 
 .defect-delete-btn {

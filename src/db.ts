@@ -47,6 +47,8 @@ export type ReleaseReviewState = Record<string, ReleaseReviewResult>;
 
 export type DefectStatus = "pending" | "processing" | "completed" | "rejected";
 
+export type DefectPriority = "low" | "medium" | "high" | "critical";
+
 export interface DefectItem {
   id: string;
   sourceRecordId: string;
@@ -58,6 +60,8 @@ export interface DefectItem {
   handlingOpinion: string;
   assignedSigner: string;
   status: DefectStatus;
+  priority: DefectPriority;
+  expectedCompletionTime?: number;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -99,7 +103,7 @@ export interface TrainingComment {
 export type TrainingCommentState = Record<string, TrainingComment>;
 
 const DB_NAME = "hxwl-07-aviation-maintenance";
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 const STORE_TEMPLATES = "templates";
 const STORE_RECORDS = "records";
@@ -223,6 +227,32 @@ function openDB(): Promise<IDBDatabase> {
         defectStore.createIndex("aircraftType", "aircraftType", { unique: false });
         defectStore.createIndex("ataChapter", "ataChapter", { unique: false });
         defectStore.createIndex("createdAt", "createdAt", { unique: false });
+        defectStore.createIndex("priority", "priority", { unique: false });
+        defectStore.createIndex("expectedCompletionTime", "expectedCompletionTime", { unique: false });
+      } else {
+        const defectStore = event.target!.transaction!.objectStore(STORE_DEFECTS);
+        if (!defectStore.indexNames.contains("priority")) {
+          defectStore.createIndex("priority", "priority", { unique: false });
+        }
+        if (!defectStore.indexNames.contains("expectedCompletionTime")) {
+          defectStore.createIndex("expectedCompletionTime", "expectedCompletionTime", { unique: false });
+        }
+        const migrateCursor = defectStore.openCursor();
+        migrateCursor.onsuccess = () => {
+          const cursor = migrateCursor.result;
+          if (cursor) {
+            const value = cursor.value as any;
+            let needUpdate = false;
+            if (!value.priority) {
+              value.priority = "medium";
+              needUpdate = true;
+            }
+            if (needUpdate) {
+              cursor.update(value);
+            }
+            cursor.continue();
+          }
+        };
       }
 
       if (!db.objectStoreNames.contains(STORE_STATUS_HISTORY)) {
@@ -519,7 +549,10 @@ export async function deleteDefect(id: string): Promise<void> {
   });
 }
 
-export async function createDefectFromRecord(record: ReviewRecord): Promise<DefectItem> {
+export async function createDefectFromRecord(
+  record: ReviewRecord,
+  options?: { priority?: DefectPriority; expectedCompletionTime?: number }
+): Promise<DefectItem> {
   const now = Date.now();
   const defect: DefectItem = {
     id: `defect-${now}`,
@@ -532,6 +565,8 @@ export async function createDefectFromRecord(record: ReviewRecord): Promise<Defe
     handlingOpinion: "",
     assignedSigner: "",
     status: "pending",
+    priority: options?.priority || "medium",
+    expectedCompletionTime: options?.expectedCompletionTime,
     createdAt: now,
     updatedAt: now
   };

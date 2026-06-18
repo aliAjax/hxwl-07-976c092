@@ -8,6 +8,7 @@ import {
   ReleaseReviewState,
   DefectItem,
   DefectState,
+  DefectPriority,
   StatusHistoryItem,
   StatusHistoryState,
   TrainingComment,
@@ -348,7 +349,7 @@ function ReleaseReviewCard({
 interface DefectCardProps {
   defect: DefectItem;
   index: number;
-  formValues: { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string };
+  formValues: { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string; priority?: DefectPriority; expectedCompletionTime?: string };
   sourceRecord?: ReviewRecord;
   onFormChange: (defectId: string, field: string, value: string) => void;
   onStartProcessing: (defectId: string) => void;
@@ -361,6 +362,9 @@ interface DefectCardProps {
   onStatusTransition?: (recordId: string, transitionIndex: number) => void;
   sourceRecordId?: string;
   showLifecycleActions?: boolean;
+  getTimeStatus?: (defect: DefectItem) => { status: string; remainingMs: number; displayText: string };
+  getPriorityText?: (priority: DefectPriority) => string;
+  getPriorityBadgeClass?: (priority: DefectPriority) => string;
 }
 
 function DefectCard({
@@ -378,7 +382,10 @@ function DefectCard({
   statusTransitions,
   onStatusTransition,
   sourceRecordId,
-  showLifecycleActions = true
+  showLifecycleActions = true,
+  getTimeStatus,
+  getPriorityText,
+  getPriorityBadgeClass
 }: DefectCardProps) {
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString("zh-CN", {
@@ -388,6 +395,17 @@ function DefectCard({
       minute: "2-digit"
     });
   };
+
+  const formatDateTimeLocal = (timestamp?: number): string => {
+    if (!timestamp) return "";
+    const d = new Date(timestamp);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const timeStatus = getTimeStatus ? getTimeStatus(defect) : null;
+  const priorityDisplay = getPriorityText ? getPriorityText(defect.priority) : defect.priority;
+  const priorityClass = getPriorityBadgeClass ? getPriorityBadgeClass(defect.priority) : "";
 
   const isPending = defect.status === "pending";
   const isProcessing = defect.status === "processing";
@@ -410,7 +428,7 @@ function DefectCard({
   );
 
   return (
-    <article className={`defect-card defect-card-${defect.status} ${isHistory ? "defect-card-history" : ""}`}>
+    <article className={`defect-card defect-card-${defect.status} ${isHistory ? "defect-card-history" : ""} ${timeStatus?.status === "overdue" ? "defect-card-overdue" : ""}`}>
       <div className="defect-card-header">
         <div className={`defect-card-index ${isPending ? "defect-index-pending" : isProcessing ? "defect-index-processing" : isCompleted ? "defect-index-completed" : "defect-index-rejected"}`}>
           {String(index + 1).padStart(2, "0")}
@@ -420,6 +438,9 @@ function DefectCard({
             <h3>{defect.aircraftType}</h3>
             <span className={`defect-status-badge ${getDefectStatusBadgeClass(defect.status)}`}>
               {getDefectStatusText(defect.status)}
+            </span>
+            <span className={`defect-priority-badge ${priorityClass}`}>
+              优先级：{priorityDisplay}
             </span>
             {sourceRecord && (
               <span className="defect-source-tag">源自检查记录</span>
@@ -431,7 +452,18 @@ function DefectCard({
             {defect.checkItem && <span className="meta-tag meta-tag-muted">{defect.checkItem}</span>}
           </div>
           <div className="defect-card-time">
-            创建时间：{formatTime(defect.createdAt)}
+            <span>创建时间：{formatTime(defect.createdAt)}</span>
+            {timeStatus && (
+              <span className={`defect-time-status defect-time-${timeStatus.status}`}>
+                {timeStatus.status === "overdue" ? "⏰ " : timeStatus.status === "soon" ? "⌛ " : "📅 "}
+                {timeStatus.displayText}
+              </span>
+            )}
+            {defect.expectedCompletionTime && (
+              <span className="defect-expected-time">
+                预计完成：{formatTime(defect.expectedCompletionTime)}
+              </span>
+            )}
           </div>
         </div>
         {!isHistory && showLifecycleActions && (
@@ -504,6 +536,28 @@ function DefectCard({
         {isPending && !isHistory && showLifecycleActions && (
           <div className="defect-action-section">
             <div className="defect-form-grid">
+              <label>
+                <span>优先级 <span className="required-mark">*</span></span>
+                <select
+                  className="defect-input"
+                  value={formValues.priority || defect.priority || "medium"}
+                  onChange={e => onFormChange(defect.id, "priority", e.target.value)}
+                >
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                  <option value="critical">紧急</option>
+                </select>
+              </label>
+              <label>
+                <span>预计完成时间</span>
+                <input
+                  type="datetime-local"
+                  className="defect-input"
+                  value={formValues.expectedCompletionTime || formatDateTimeLocal(defect.expectedCompletionTime)}
+                  onChange={e => onFormChange(defect.id, "expectedCompletionTime", e.target.value)}
+                />
+              </label>
               <label className="full-width">
                 <span>处理意见 <span className="required-mark">*</span></span>
                 <textarea
@@ -677,7 +731,7 @@ function App() {
   const [trainingComments, setTrainingComments] = useState<TrainingCommentState>({});
   const [activeHistoryRecordId, setActiveHistoryRecordId] = useState<string | null>(null);
   const [activeDefectTab, setActiveDefectTab] = useState<"pending" | "history">("pending");
-  const [defectFormValues, setDefectFormValues] = useState<Record<string, { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string }>>({});
+  const [defectFormValues, setDefectFormValues] = useState<Record<string, { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string; priority: DefectPriority; expectedCompletionTime: string }>>({});
   const [formValues, setFormValues] = useState<FormValues>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
@@ -1352,6 +1406,8 @@ function App() {
         assignedSigner: prev[defectId]?.assignedSigner || "",
         rejectedReason: prev[defectId]?.rejectedReason || "",
         completedNote: prev[defectId]?.completedNote || "",
+        priority: prev[defectId]?.priority || "medium",
+        expectedCompletionTime: prev[defectId]?.expectedCompletionTime || "",
         ...prev[defectId],
         [field]: value
       }
@@ -1365,6 +1421,10 @@ function App() {
     const formVals = defectFormValues[defectId] || {};
     const handlingOpinion = formVals.handlingOpinion || defect.handlingOpinion;
     const assignedSigner = formVals.assignedSigner || defect.assignedSigner;
+    const priority = (formVals.priority as DefectPriority) || defect.priority;
+    const expectedCompletionTime = formVals.expectedCompletionTime
+      ? new Date(formVals.expectedCompletionTime).getTime()
+      : defect.expectedCompletionTime;
 
     if (!handlingOpinion.trim()) {
       alert("请填写处理意见！");
@@ -1379,6 +1439,8 @@ function App() {
       ...defect,
       handlingOpinion,
       assignedSigner,
+      priority,
+      expectedCompletionTime,
       status: "processing",
       updatedAt: Date.now()
     };
@@ -1503,18 +1565,107 @@ function App() {
     }
   };
 
+  const PRIORITY_WEIGHT: Record<DefectPriority, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1
+  };
+
+  const PRIORITY_TEXT: Record<DefectPriority, string> = {
+    critical: "紧急",
+    high: "高",
+    medium: "中",
+    low: "低"
+  };
+
+  const getPriorityBadgeClass = (priority: DefectPriority): string => {
+    switch (priority) {
+      case "critical": return "defect-priority-critical";
+      case "high": return "defect-priority-high";
+      case "medium": return "defect-priority-medium";
+      case "low": return "defect-priority-low";
+    }
+  };
+
+  const SOON_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+  const getTimeStatus = (defect: DefectItem): { status: "overdue" | "soon" | "normal" | "none"; remainingMs: number; displayText: string } => {
+    const now = Date.now();
+    if (!defect.expectedCompletionTime) {
+      return { status: "none", remainingMs: 0, displayText: "未设期限" };
+    }
+    const remainingMs = defect.expectedCompletionTime - now;
+    const absMs = Math.abs(remainingMs);
+    const absDays = Math.floor(absMs / (24 * 60 * 60 * 1000));
+    const absHours = Math.floor((absMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+    const absMinutes = Math.floor((absMs % (60 * 60 * 1000)) / (60 * 1000));
+
+    const formatDuration = (ms: number): string => {
+      const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+      const hours = Math.floor((ms % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+      const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+      if (days > 0) return `${days}天${hours}小时`;
+      if (hours > 0) return `${hours}小时${minutes}分`;
+      return `${minutes}分钟`;
+    };
+
+    if (remainingMs < 0) {
+      return {
+        status: "overdue",
+        remainingMs,
+        displayText: `已逾期 ${formatDuration(absMs)}`
+      };
+    } else if (remainingMs <= SOON_THRESHOLD_MS) {
+      return {
+        status: "soon",
+        remainingMs,
+        displayText: `剩余 ${formatDuration(remainingMs)}`
+      };
+    } else {
+      return {
+        status: "normal",
+        remainingMs,
+        displayText: `剩余 ${formatDuration(remainingMs)}`
+      };
+    }
+  };
+
+  const isOverdue = (defect: DefectItem): boolean => {
+    return !!defect.expectedCompletionTime && defect.expectedCompletionTime < Date.now();
+  };
+
+  const isSoonOverdue = (defect: DefectItem): boolean => {
+    if (!defect.expectedCompletionTime) return false;
+    const remaining = defect.expectedCompletionTime - Date.now();
+    return remaining > 0 && remaining <= SOON_THRESHOLD_MS;
+  };
+
   const defectStats = useMemo(() => {
     const allDefects = Object.values(defects);
     const pending = allDefects.filter(d => d.status === "pending").length;
     const processing = allDefects.filter(d => d.status === "processing").length;
     const completed = allDefects.filter(d => d.status === "completed").length;
     const rejected = allDefects.filter(d => d.status === "rejected").length;
-    return { total: allDefects.length, pending, processing, completed, rejected };
+    const activeDefects = allDefects.filter(d => d.status === "pending" || d.status === "processing");
+    const overdue = activeDefects.filter(d => isOverdue(d)).length;
+    const soonOverdue = activeDefects.filter(d => isSoonOverdue(d)).length;
+    return { total: allDefects.length, pending, processing, completed, rejected, overdue, soonOverdue };
   }, [defects]);
 
   const groupedDefects = useMemo(() => {
     const allDefects = Object.values(defects);
-    const pending = allDefects.filter(d => d.status === "pending" || d.status === "processing");
+    const pending = allDefects
+      .filter(d => d.status === "pending" || d.status === "processing")
+      .sort((a, b) => {
+        const aOverdue = isOverdue(a) ? 1 : 0;
+        const bOverdue = isOverdue(b) ? 1 : 0;
+        if (aOverdue !== bOverdue) return bOverdue - aOverdue;
+        const aPriority = PRIORITY_WEIGHT[a.priority] || 0;
+        const bPriority = PRIORITY_WEIGHT[b.priority] || 0;
+        if (aPriority !== bPriority) return bPriority - aPriority;
+        return b.createdAt - a.createdAt;
+      });
     const history = allDefects.filter(d => d.status === "completed" || d.status === "rejected");
     return { pending, history };
   }, [defects]);
@@ -2592,6 +2743,14 @@ function App() {
                 <span>处理中</span>
                 <strong>{defectStats.processing}</strong>
               </div>
+              <div className="defect-metric defect-metric-soon">
+                <span>即将逾期</span>
+                <strong>{defectStats.soonOverdue}</strong>
+              </div>
+              <div className="defect-metric defect-metric-overdue">
+                <span>已逾期</span>
+                <strong>{defectStats.overdue}</strong>
+              </div>
               <div className="defect-metric defect-metric-completed">
                 <span>已完成</span>
                 <strong>{defectStats.completed}</strong>
@@ -2620,7 +2779,7 @@ function App() {
                         key={defect.id}
                         defect={defect}
                         index={index}
-                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
                         sourceRecord={srcRecord}
                         onFormChange={handleDefectFormChange}
                         onStartProcessing={handleStartProcessing}
@@ -2633,6 +2792,9 @@ function App() {
                         onStatusTransition={handleStatusTransition}
                         sourceRecordId={srcRecord?.id}
                         showLifecycleActions={false}
+                        getTimeStatus={getTimeStatus}
+                        getPriorityText={(p) => PRIORITY_TEXT[p]}
+                        getPriorityBadgeClass={getPriorityBadgeClass}
                       />
                     );
                   })
@@ -2656,7 +2818,7 @@ function App() {
                         key={defect.id}
                         defect={defect}
                         index={index}
-                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
                         sourceRecord={srcRecord}
                         onFormChange={handleDefectFormChange}
                         onStartProcessing={handleStartProcessing}
@@ -2669,6 +2831,9 @@ function App() {
                         onStatusTransition={handleStatusTransition}
                         sourceRecordId={srcRecord?.id}
                         showLifecycleActions={false}
+                        getTimeStatus={getTimeStatus}
+                        getPriorityText={(p) => PRIORITY_TEXT[p]}
+                        getPriorityBadgeClass={getPriorityBadgeClass}
                       />
                     );
                   })
@@ -2927,6 +3092,14 @@ function App() {
                 <span>处理中</span>
                 <strong>{defectStats.processing}</strong>
               </div>
+              <div className="defect-metric defect-metric-soon">
+                <span>即将逾期</span>
+                <strong>{defectStats.soonOverdue}</strong>
+              </div>
+              <div className="defect-metric defect-metric-overdue">
+                <span>已逾期</span>
+                <strong>{defectStats.overdue}</strong>
+              </div>
               <div className="defect-metric defect-metric-completed">
                 <span>已完成</span>
                 <strong>{defectStats.completed}</strong>
@@ -2955,7 +3128,7 @@ function App() {
                       key={defect.id}
                       defect={defect}
                       index={index}
-                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
                       sourceRecord={srcRecord}
                       onFormChange={handleDefectFormChange}
                       onStartProcessing={handleStartProcessing}
@@ -2967,6 +3140,9 @@ function App() {
                       statusTransitions={transitions.length > 0 ? transitions : undefined}
                       onStatusTransition={handleStatusTransition}
                       sourceRecordId={srcRecord?.id}
+                      getTimeStatus={getTimeStatus}
+                      getPriorityText={(p) => PRIORITY_TEXT[p]}
+                      getPriorityBadgeClass={getPriorityBadgeClass}
                     />
                     );
                   })
@@ -2990,7 +3166,7 @@ function App() {
                       key={defect.id}
                       defect={defect}
                       index={index}
-                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
                       sourceRecord={srcRecord}
                       onFormChange={handleDefectFormChange}
                       onStartProcessing={handleStartProcessing}
@@ -3002,6 +3178,9 @@ function App() {
                       statusTransitions={transitions.length > 0 ? transitions : undefined}
                       onStatusTransition={handleStatusTransition}
                       sourceRecordId={srcRecord?.id}
+                      getTimeStatus={getTimeStatus}
+                      getPriorityText={(p) => PRIORITY_TEXT[p]}
+                      getPriorityBadgeClass={getPriorityBadgeClass}
                     />
                     );
                   })
