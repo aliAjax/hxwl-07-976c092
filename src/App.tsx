@@ -916,30 +916,6 @@ function App() {
     }
   }, [activeFilter, activeFilters]);
 
-  useEffect(() => {
-    setRecordFilters(prev => {
-      let changed = false;
-      const next = { ...prev };
-
-      if (next.aircraftType && !availableAircraftTypeOptions.includes(next.aircraftType)) {
-        next.aircraftType = "";
-        changed = true;
-      }
-
-      if (next.ataChapter && !availableAtaChapterOptions.includes(next.ataChapter)) {
-        next.ataChapter = "";
-        changed = true;
-      }
-
-      if (next.status && !availableStatusOptions.includes(next.status)) {
-        next.status = "";
-        changed = true;
-      }
-
-      return changed ? next : prev;
-    });
-  }, [availableAircraftTypeOptions, availableAtaChapterOptions, availableStatusOptions]);
-
   const getFormFieldValue = (key: string): string => {
     const formAny = formValues as any;
     return formAny[key] || "";
@@ -963,25 +939,56 @@ function App() {
     return getRoleVisibleFields(config, activeRole);
   };
 
-  const availableAircraftTypeOptions = useMemo(() => {
+  const allAircraftTypes = useMemo(() => {
     const types = new Set<string>();
     reviewRecords.forEach(r => types.add(r.aircraftType));
     return Array.from(types).sort();
   }, [reviewRecords]);
 
-  const availableAtaChapterOptions = useMemo(() => {
+  const allAtaChapters = useMemo(() => {
     const chapters = new Set<string>();
-    reviewRecords
-      .filter(r => !recordFilters.aircraftType || r.aircraftType === recordFilters.aircraftType)
-      .forEach(r => chapters.add(r.ataChapter));
+    reviewRecords.forEach(r => chapters.add(r.ataChapter));
     return Array.from(chapters).sort();
-  }, [reviewRecords, recordFilters.aircraftType]);
+  }, [reviewRecords]);
 
-  const availableStatusOptions = useMemo(() => {
+  const allStatuses = useMemo(() => {
     const statuses = new Set<string>();
     reviewRecords.forEach(r => statuses.add(r.status));
     return Array.from(statuses).sort();
   }, [reviewRecords]);
+
+  const availableAtaChapterOptions = useMemo(() => {
+    if (!recordFilters.aircraftType) return allAtaChapters;
+    const chapters = new Set<string>();
+    reviewRecords
+      .filter(r => r.aircraftType === recordFilters.aircraftType)
+      .forEach(r => chapters.add(r.ataChapter));
+    return Array.from(chapters).sort();
+  }, [reviewRecords, recordFilters.aircraftType, allAtaChapters]);
+
+  useEffect(() => {
+    setRecordFilters(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (next.aircraftType && !allAircraftTypes.includes(next.aircraftType)) {
+        next.aircraftType = "";
+        changed = true;
+      }
+
+      if (next.ataChapter && !allAtaChapters.includes(next.ataChapter)) {
+        next.ataChapter = "";
+        changed = true;
+      }
+
+      if (next.status && !allStatuses.includes(next.status)) {
+        next.status = "";
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [allAircraftTypes, allAtaChapters, allStatuses]);
 
   const filteredRecords = useMemo(() => {
     let result = reviewRecords;
@@ -2095,7 +2102,7 @@ function App() {
                 onChange={e => handleRecordFilterChange("aircraftType", e.target.value)}
               >
                 <option value="">全部机型</option>
-                {availableAircraftTypeOptions.map(t => (
+                {allAircraftTypes.map(t => (
                   <option key={t} value={t}>{t}</option>
                 ))}
               </select>
@@ -2120,7 +2127,7 @@ function App() {
                 onChange={e => handleRecordFilterChange("status", e.target.value)}
               >
                 <option value="">全部状态</option>
-                {availableStatusOptions.map(s => (
+                {allStatuses.map(s => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
