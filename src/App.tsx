@@ -360,6 +360,7 @@ interface DefectCardProps {
   statusTransitions?: { label: string; colorClass?: string; from: string; to: string; requiredFields?: string[] }[];
   onStatusTransition?: (recordId: string, transitionIndex: number) => void;
   sourceRecordId?: string;
+  showLifecycleActions?: boolean;
 }
 
 function DefectCard({
@@ -376,7 +377,8 @@ function DefectCard({
   isHistory = false,
   statusTransitions,
   onStatusTransition,
-  sourceRecordId
+  sourceRecordId,
+  showLifecycleActions = true
 }: DefectCardProps) {
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString("zh-CN", {
@@ -391,6 +393,21 @@ function DefectCard({
   const isProcessing = defect.status === "processing";
   const isCompleted = defect.status === "completed";
   const isRejected = defect.status === "rejected";
+  const hasStatusTransitions = !!(statusTransitions && statusTransitions.length > 0 && onStatusTransition && sourceRecordId);
+  const renderStatusTransitions = (keyPrefix: string) => (
+    <div className="defect-status-transitions">
+      <span className="defect-transition-label">记录状态操作：</span>
+      {statusTransitions!.map((transition, tIdx) => (
+        <button
+          key={`${keyPrefix}-${transition.from}-${transition.to}`}
+          className={`status-transition-btn ${transition.colorClass || ""}`}
+          onClick={() => onStatusTransition!(sourceRecordId!, tIdx)}
+        >
+          {transition.label}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <article className={`defect-card defect-card-${defect.status} ${isHistory ? "defect-card-history" : ""}`}>
@@ -417,7 +434,7 @@ function DefectCard({
             创建时间：{formatTime(defect.createdAt)}
           </div>
         </div>
-        {!isHistory && (
+        {!isHistory && showLifecycleActions && (
           <button className="defect-delete-btn" onClick={() => onDelete(defect.id)} title="删除">
             ×
           </button>
@@ -478,7 +495,13 @@ function DefectCard({
           </div>
         )}
 
-        {isPending && !isHistory && (
+        {!showLifecycleActions && hasStatusTransitions && (
+          <div className="defect-history-actions">
+            {renderStatusTransitions("readonly")}
+          </div>
+        )}
+
+        {isPending && !isHistory && showLifecycleActions && (
           <div className="defect-action-section">
             <div className="defect-form-grid">
               <label className="full-width">
@@ -502,17 +525,7 @@ function DefectCard({
               </label>
             </div>
             <div className="defect-actions-row">
-              {statusTransitions && statusTransitions.length > 0 && onStatusTransition && sourceRecordId && (
-                statusTransitions.map((transition, tIdx) => (
-                  <button
-                    key={`pending-${transition.from}-${transition.to}`}
-                    className={`status-transition-btn ${transition.colorClass || ""}`}
-                    onClick={() => onStatusTransition(sourceRecordId, tIdx)}
-                  >
-                    {transition.label}
-                  </button>
-                ))
-              )}
+              {hasStatusTransitions && renderStatusTransitions("pending")}
               <button
                 className="defect-start-btn"
                 onClick={() => onStartProcessing(defect.id)}
@@ -523,7 +536,7 @@ function DefectCard({
           </div>
         )}
 
-        {isProcessing && !isHistory && (
+        {isProcessing && !isHistory && showLifecycleActions && (
           <div className="defect-action-section">
             <label className="full-width">
               <span>完成说明</span>
@@ -546,17 +559,7 @@ function DefectCard({
               />
             </label>
             <div className="defect-actions-row">
-              {statusTransitions && statusTransitions.length > 0 && onStatusTransition && sourceRecordId && (
-                statusTransitions.map((transition, tIdx) => (
-                  <button
-                    key={`processing-${transition.from}-${transition.to}`}
-                    className={`status-transition-btn ${transition.colorClass || ""}`}
-                    onClick={() => onStatusTransition(sourceRecordId, tIdx)}
-                  >
-                    {transition.label}
-                  </button>
-                ))
-              )}
+              {hasStatusTransitions && renderStatusTransitions("processing")}
               <button
                 className="defect-reject-btn"
                 onClick={() => onReject(defect.id)}
@@ -575,26 +578,15 @@ function DefectCard({
 
         {isHistory && (
           <div className="defect-history-actions">
-            {statusTransitions && statusTransitions.length > 0 && onStatusTransition && sourceRecordId && (
-              <div className="defect-status-transitions">
-                <span className="defect-transition-label">记录状态操作：</span>
-                {statusTransitions.map((transition, tIdx) => (
-                  <button
-                    key={`${transition.from}-${transition.to}`}
-                    className={`status-transition-btn ${transition.colorClass || ""}`}
-                    onClick={() => onStatusTransition(sourceRecordId, tIdx)}
-                  >
-                    {transition.label}
-                  </button>
-                ))}
-              </div>
+            {hasStatusTransitions && showLifecycleActions && renderStatusTransitions("history")}
+            {showLifecycleActions && (
+              <button
+                className="defect-reopen-btn"
+                onClick={() => onReopen(defect.id)}
+              >
+                重新打开
+              </button>
             )}
-            <button
-              className="defect-reopen-btn"
-              onClick={() => onReopen(defect.id)}
-            >
-              重新打开
-            </button>
           </div>
         )}
       </div>
@@ -2422,48 +2414,49 @@ function App() {
       )}
 
       {activeRole === "放行人员" ? (
-        <section className="release-panel">
-          <div className="section-heading">
-            <div>
-              <p>放行前复核</p>
-              <h2>放行复核工作台</h2>
+        <>
+          <section className="release-panel">
+            <div className="section-heading">
+              <div>
+                <p>放行前复核</p>
+                <h2>放行复核工作台</h2>
+              </div>
+              <div className="review-actions">
+                <button className="review-summary-btn">
+                  复核进度 {releaseStats.reviewed}/{releaseStats.total}
+                  {releaseStats.defectReviewed > 0 && (
+                    <span className="defect-review-count"> · 缺陷 {releaseStats.defectReviewed}</span>
+                  )}
+                </button>
+              </div>
             </div>
-            <div className="review-actions">
-              <button className="review-summary-btn">
-                复核进度 {releaseStats.reviewed}/{releaseStats.total}
-                {releaseStats.defectReviewed > 0 && (
-                  <span className="defect-review-count"> · 缺陷 {releaseStats.defectReviewed}</span>
-                )}
-              </button>
-            </div>
-          </div>
 
-          <div className="release-metrics">
-            <div className="release-metric">
-              <span>记录总数</span>
-              <strong>{releaseStats.total}</strong>
+            <div className="release-metrics">
+              <div className="release-metric">
+                <span>记录总数</span>
+                <strong>{releaseStats.total}</strong>
+              </div>
+              <div className="release-metric release-metric-ok">
+                <span>正常</span>
+                <strong>{releaseStats.normal}</strong>
+              </div>
+              <div className="release-metric release-metric-watch">
+                <span>待复核</span>
+                <strong>{releaseStats.pending}</strong>
+              </div>
+              <div className="release-metric release-metric-danger">
+                <span>缺陷项</span>
+                <strong>{releaseStats.defect}</strong>
+              </div>
+              <div className="release-metric release-metric-primary">
+                <span>已通过</span>
+                <strong>{releaseStats.passed}</strong>
+              </div>
+              <div className="release-metric release-metric-rejected">
+                <span>已驳回</span>
+                <strong>{releaseStats.rejected}</strong>
+              </div>
             </div>
-            <div className="release-metric release-metric-ok">
-              <span>正常</span>
-              <strong>{releaseStats.normal}</strong>
-            </div>
-            <div className="release-metric release-metric-watch">
-              <span>待复核</span>
-              <strong>{releaseStats.pending}</strong>
-            </div>
-            <div className="release-metric release-metric-danger">
-              <span>缺陷项</span>
-              <strong>{releaseStats.defect}</strong>
-            </div>
-            <div className="release-metric release-metric-primary">
-              <span>已通过</span>
-              <strong>{releaseStats.passed}</strong>
-            </div>
-            <div className="release-metric release-metric-rejected">
-              <span>已驳回</span>
-              <strong>{releaseStats.rejected}</strong>
-            </div>
-          </div>
 
           <div className="release-groups">
             <div className="release-group">
@@ -2562,7 +2555,128 @@ function App() {
               </div>
             </div>
           </div>
-        </section>
+          </section>
+
+          <section className="defect-panel">
+            <div className="section-heading">
+              <div>
+                <p>放行缺陷闭环</p>
+                <h2>缺陷处理工作台</h2>
+              </div>
+              <div className="defect-tabs">
+                <button
+                  className={activeDefectTab === "pending" ? "defect-tab-active" : ""}
+                  onClick={() => setActiveDefectTab("pending")}
+                >
+                  待处理 ({groupedDefects.pending.length})
+                </button>
+                <button
+                  className={activeDefectTab === "history" ? "defect-tab-active" : ""}
+                  onClick={() => setActiveDefectTab("history")}
+                >
+                  历史记录 ({groupedDefects.history.length})
+                </button>
+              </div>
+            </div>
+
+            <div className="defect-metrics">
+              <div className="defect-metric">
+                <span>缺陷总数</span>
+                <strong>{defectStats.total}</strong>
+              </div>
+              <div className="defect-metric defect-metric-pending">
+                <span>待处理</span>
+                <strong>{defectStats.pending}</strong>
+              </div>
+              <div className="defect-metric defect-metric-processing">
+                <span>处理中</span>
+                <strong>{defectStats.processing}</strong>
+              </div>
+              <div className="defect-metric defect-metric-completed">
+                <span>已完成</span>
+                <strong>{defectStats.completed}</strong>
+              </div>
+              <div className="defect-metric defect-metric-rejected">
+                <span>已退回</span>
+                <strong>{defectStats.rejected}</strong>
+              </div>
+            </div>
+
+            {activeDefectTab === "pending" ? (
+              <div className="defect-list">
+                {groupedDefects.pending.length === 0 ? (
+                  <div className="empty-state">
+                    <p>暂无待处理缺陷。缺陷记录生成后，可在这里执行当前角色允许的状态流转。</p>
+                  </div>
+                ) : (
+                  groupedDefects.pending.map((defect, index) => {
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
+                    const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
+                    const transitions = srcRecord && srcConfig
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
+                      : [];
+                    return (
+                      <DefectCard
+                        key={defect.id}
+                        defect={defect}
+                        index={index}
+                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                        sourceRecord={srcRecord}
+                        onFormChange={handleDefectFormChange}
+                        onStartProcessing={handleStartProcessing}
+                        onComplete={handleCompleteDefect}
+                        onReject={handleRejectDefect}
+                        onReopen={handleReopenDefect}
+                        onDelete={handleDeleteDefect}
+                        isHistory={false}
+                        statusTransitions={transitions.length > 0 ? transitions : undefined}
+                        onStatusTransition={handleStatusTransition}
+                        sourceRecordId={srcRecord?.id}
+                        showLifecycleActions={false}
+                      />
+                    );
+                  })
+                )}
+              </div>
+            ) : (
+              <div className="defect-list">
+                {groupedDefects.history.length === 0 ? (
+                  <div className="empty-state">
+                    <p>暂无历史缺陷记录。</p>
+                  </div>
+                ) : (
+                  groupedDefects.history.map((defect, index) => {
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
+                    const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
+                    const transitions = srcRecord && srcConfig
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
+                      : [];
+                    return (
+                      <DefectCard
+                        key={defect.id}
+                        defect={defect}
+                        index={index}
+                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
+                        sourceRecord={srcRecord}
+                        onFormChange={handleDefectFormChange}
+                        onStartProcessing={handleStartProcessing}
+                        onComplete={handleCompleteDefect}
+                        onReject={handleRejectDefect}
+                        onReopen={handleReopenDefect}
+                        onDelete={handleDeleteDefect}
+                        isHistory={true}
+                        statusTransitions={transitions.length > 0 ? transitions : undefined}
+                        onStatusTransition={handleStatusTransition}
+                        sourceRecordId={srcRecord?.id}
+                        showLifecycleActions={false}
+                      />
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </section>
+        </>
       ) : activeRole === "培训教员" ? (
         <section className="review-panel">
           <div className="section-heading">
