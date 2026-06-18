@@ -2619,6 +2619,10 @@ function App() {
                 const recordHistory = statusHistory[record.id] || [];
                 const commentData = trainingComments[record.id];
                 const releaseReview = releaseReviews[record.id];
+                const recordConfig = findRecordWorkflowConfig(record);
+                const availableTransitions = recordConfig
+                  ? getAvailableStatusTransitions(recordConfig, record.status, activeRole)
+                  : [];
                 return (
                   <article key={record.id} className="review-card">
                     <div className="review-card-header">
@@ -2702,6 +2706,23 @@ function App() {
                           <div className={`review-result-display ${releaseReview.status}`}>
                             <strong>{releaseReview.status === "passed" ? "✅ 通过" : "❌ 驳回"}</strong>
                             {releaseReview.opinion && <p>{releaseReview.opinion}</p>}
+                          </div>
+                        </div>
+                      )}
+
+                      {availableTransitions.length > 0 && (
+                        <div className="status-transition-section">
+                          <div className="section-label">状态操作</div>
+                          <div className="status-transition-row">
+                            {availableTransitions.map((transition, tIdx) => (
+                              <button
+                                key={`${transition.from}-${transition.to}`}
+                                className={`status-transition-btn ${transition.colorClass || ""}`}
+                                onClick={() => handleStatusTransition(record.id, tIdx)}
+                              >
+                                {transition.label}
+                              </button>
+                            ))}
                           </div>
                         </div>
                       )}
