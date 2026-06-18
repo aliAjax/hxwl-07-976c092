@@ -1462,6 +1462,7 @@ function App() {
   };
 
   const handleDefectFormChange = (defectId: string, field: string, value: string) => {
+    const defect = defects[defectId];
     setDefectFormValues(prev => ({
       ...prev,
       [defectId]: {
@@ -1469,8 +1470,8 @@ function App() {
         assignedSigner: prev[defectId]?.assignedSigner || "",
         rejectedReason: prev[defectId]?.rejectedReason || "",
         completedNote: prev[defectId]?.completedNote || "",
-        priority: prev[defectId]?.priority || "medium",
-        expectedCompletionTime: prev[defectId]?.expectedCompletionTime || "",
+        priority: prev[defectId]?.priority || defect?.priority || "medium",
+        expectedCompletionTime: prev[defectId]?.expectedCompletionTime || formatDateTimeLocalValue(defect?.expectedCompletionTime),
         ...prev[defectId],
         [field]: value
       }
@@ -1652,6 +1653,22 @@ function App() {
   };
 
   const SOON_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+  const formatDateTimeLocalValue = (timestamp?: number): string => {
+    if (!timestamp) return "";
+    const d = new Date(timestamp);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const getDefaultDefectFormValues = (defect: DefectItem) => ({
+    handlingOpinion: "",
+    assignedSigner: "",
+    rejectedReason: "",
+    completedNote: "",
+    priority: defect.priority || "medium",
+    expectedCompletionTime: formatDateTimeLocalValue(defect.expectedCompletionTime)
+  });
 
   const getTimeStatus = (defect: DefectItem): { status: "overdue" | "soon" | "normal" | "none"; remainingMs: number; displayText: string } => {
     const now = Date.now();
@@ -2842,7 +2859,7 @@ function App() {
                         key={defect.id}
                         defect={defect}
                         index={index}
-                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
+                        formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
                         sourceRecord={srcRecord}
                         onFormChange={handleDefectFormChange}
                         onStartProcessing={handleStartProcessing}
@@ -2882,7 +2899,7 @@ function App() {
                         key={defect.id}
                         defect={defect}
                         index={index}
-                        formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
+                        formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
                         sourceRecord={srcRecord}
                         onFormChange={handleDefectFormChange}
                         onStartProcessing={handleStartProcessing}
@@ -3193,7 +3210,7 @@ function App() {
                       key={defect.id}
                       defect={defect}
                       index={index}
-                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
+                      formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
                       sourceRecord={srcRecord}
                       onFormChange={handleDefectFormChange}
                       onStartProcessing={handleStartProcessing}
@@ -3232,7 +3249,7 @@ function App() {
                       key={defect.id}
                       defect={defect}
                       index={index}
-                      formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "", priority: "medium", expectedCompletionTime: "" }}
+                      formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
                       sourceRecord={srcRecord}
                       onFormChange={handleDefectFormChange}
                       onStartProcessing={handleStartProcessing}
