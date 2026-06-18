@@ -2761,11 +2761,9 @@ function App() {
                             <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
                               {record.status}
                             </span>
-                            {trainingComments[record.id] && (
-                              <span className={`training-status-badge training-status-${trainingComments[record.id].status || "待讲评"}`}>
-                                {trainingComments[record.id].status || "待讲评"}
-                              </span>
-                            )}
+                            <span className={`training-status-badge training-status-${trainingComments[record.id]?.status || "待讲评"}`}>
+                              {trainingComments[record.id]?.status || "待讲评"}
+                            </span>
                             <button
                               className="history-btn history-btn-sm"
                               onClick={() => setActiveHistoryRecordId(
@@ -2840,29 +2838,24 @@ function App() {
                                 </div>
                               </div>
                             )}
-                            {trainingComments[record.id] && (
-                              <div className="comment-section">
-                                <div className="section-label">
-                                  培训讲评
-                                  {(() => {
-                                    const status = trainingComments[record.id].status || "待讲评";
-                                    return (
-                                      <span className={`training-status-badge training-status-${status}`}>
-                                        {status}
-                                      </span>
-                                    );
-                                  })()}
+                            <div className="comment-section">
+                              <div className="section-label">
+                                培训讲评
+                                <span className={`training-status-badge training-status-${trainingComments[record.id]?.status || "待讲评"}`}>
+                                  {trainingComments[record.id]?.status || "待讲评"}
+                                </span>
+                                {trainingComments[record.id] && (
                                   <span className="reviewer-info">
                                     {trainingComments[record.id].trainer} · {new Date(trainingComments[record.id].updatedAt).toLocaleString("zh-CN", {
                                       month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
                                     })}
                                   </span>
-                                </div>
-                                <div className="comment-display">
-                                  {trainingComments[record.id].comment || "暂无讲评内容"}
-                                </div>
+                                )}
                               </div>
-                            )}
+                              <div className="comment-display">
+                                {trainingComments[record.id]?.comment || "暂无讲评内容"}
+                              </div>
+                            </div>
                           </div>
                         )}
                       </article>
