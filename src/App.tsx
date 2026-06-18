@@ -1027,17 +1027,27 @@ function App() {
       await saveReleaseReview(review);
       setReleaseReviews(prev => ({ ...prev, [recordId]: review }));
       
-      const newStatus = status === "passed" ? "正常" : "待复核";
-      if (record.status !== newStatus) {
+      const isDefect = record.status.includes("缺陷");
+      let newStatus: string;
+      if (status === "passed") {
+        newStatus = isDefect ? "缺陷" : "正常";
+      } else {
+        newStatus = "待复核";
+      }
+      if (record.status !== newStatus || (opinion && opinion !== record.handling)) {
         const updatedRecord = { ...record, status: newStatus, handling: opinion || record.handling };
         await updateRecord(updatedRecord);
         setReviewRecords(prev => prev.map(r => r.id === recordId ? updatedRecord : r));
-        await recordStatusChange(
-          recordId,
-          record.status,
-          newStatus,
-          status === "passed" ? `放行通过：${opinion || "无意见"}` : `驳回需返工：${opinion || "无意见"}`
-        );
+        if (record.status !== newStatus) {
+          await recordStatusChange(
+            recordId,
+            record.status,
+            newStatus,
+            status === "passed"
+              ? (isDefect ? `带缺陷放行：${opinion || "无意见"}` : `放行通过：${opinion || "无意见"}`)
+              : `驳回需返工：${opinion || "无意见"}`
+          );
+        }
       }
       
       setReleaseOpinions(prev => {
@@ -1991,52 +2001,56 @@ function App() {
         </section>
       </section>
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>模板管理</p>
-            <h2>检查任务模板</h2>
-          </div>
-          <button className="primary-action" onClick={openNewModal}>
-            新增模板
-          </button>
-        </div>
-        <div className="template-list">
-          {templates.length === 0 ? (
-            <div className="empty-state">
-              <p>暂无模板，点击"新增模板"创建常用检查项目模板</p>
+      {activeRole !== "培训教员" && (
+        <section className="records panel">
+          <div className="section-heading">
+            <div>
+              <p>模板管理</p>
+              <h2>检查任务模板</h2>
             </div>
-          ) : (
-            templates.map(template => (
-              <article key={template.id} className="template-card">
-                <div className="template-header">
-                  <div>
-                    <h3>{template.name}</h3>
-                    <p className="template-meta">
-                      {template.aircraftType} · {template.ataChapter} · {template.checkArea}
-                    </p>
+            <button className="primary-action" onClick={openNewModal}>
+              新增模板
+            </button>
+          </div>
+          <div className="template-list">
+            {templates.length === 0 ? (
+              <div className="empty-state">
+                <p>暂无模板，点击"新增模板"创建常用检查项目模板</p>
+              </div>
+            ) : (
+              templates.map(template => (
+                <article key={template.id} className="template-card">
+                  <div className="template-header">
+                    <div>
+                      <h3>{template.name}</h3>
+                      <p className="template-meta">
+                        {template.aircraftType} · {template.ataChapter} · {template.checkArea}
+                      </p>
+                    </div>
+                    <div className="template-actions">
+                      {activeRole === "维修工程师" && (
+                        <button className="apply-btn" onClick={() => applyTemplate(template)}>
+                          应用模板
+                        </button>
+                      )}
+                      <button onClick={() => openEditModal(template)}>编辑</button>
+                      <button className="delete-btn" onClick={() => deleteTemplate(template.id)}>
+                        删除
+                      </button>
+                    </div>
                   </div>
-                  <div className="template-actions">
-                    <button className="apply-btn" onClick={() => applyTemplate(template)}>
-                      应用模板
-                    </button>
-                    <button onClick={() => openEditModal(template)}>编辑</button>
-                    <button className="delete-btn" onClick={() => deleteTemplate(template.id)}>
-                      删除
-                    </button>
-                  </div>
-                </div>
-                {template.checkItem && (
-                  <div className="template-content">
-                    <span className="template-label">检查项目：</span>
-                    <span>{template.checkItem}</span>
-                  </div>
-                )}
-              </article>
-            ))
-          )}
-        </div>
-      </section>
+                  {template.checkItem && (
+                    <div className="template-content">
+                      <span className="template-label">检查项目：</span>
+                      <span>{template.checkItem}</span>
+                    </div>
+                  )}
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      )}
 
       {activeRole === "放行人员" ? (
         <section className="release-panel">
