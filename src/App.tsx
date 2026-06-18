@@ -1348,9 +1348,16 @@ function App() {
     });
   };
 
-  const getPendingRecordsInDetail = () => {
+  const getDetailRecords = () => {
     if (!matrixDetailData) return [];
-    return matrixDetailData.records.filter(r => {
+    return reviewRecords.filter(r =>
+      r.aircraftType === matrixDetailData.aircraftType &&
+      r.ataChapter === matrixDetailData.ataChapter
+    );
+  };
+
+  const getPendingRecordsInDetail = () => {
+    return getDetailRecords().filter(r => {
       const category = getStatusCategory(r.status);
       const isReviewed = !!releaseReviews[r.id];
       return category === "pending" && !isReviewed;
@@ -1358,16 +1365,14 @@ function App() {
   };
 
   const getDefectRecordsInDetail = () => {
-    if (!matrixDetailData) return [];
-    return matrixDetailData.records.filter(r => {
+    return getDetailRecords().filter(r => {
       const category = getStatusCategory(r.status);
       return category === "defect";
     });
   };
 
   const getNormalRecordsInDetail = () => {
-    if (!matrixDetailData) return [];
-    return matrixDetailData.records.filter(r => {
+    return getDetailRecords().filter(r => {
       const category = getStatusCategory(r.status);
       const isReviewed = !!releaseReviews[r.id];
       return category === "normal" || (category === "pending" && isReviewed);
@@ -3981,13 +3986,13 @@ function App() {
               <h2>
                 {matrixDetailData.aircraftType} - {matrixDetailData.ataChapter}
                 <span className="detail-count-badge">
-                  共 {matrixDetailData.records.length} 条记录
+                  共 {getDetailRecords().length} 条记录
                 </span>
               </h2>
               <button className="close-btn" onClick={closeMatrixDetail}>×</button>
             </div>
             <div className="modal-body matrix-detail-body">
-              {matrixDetailData.records.length === 0 ? (
+              {getDetailRecords().length === 0 ? (
                 <div className="empty-state">
                   <p>该机型章节下暂无记录</p>
                 </div>
