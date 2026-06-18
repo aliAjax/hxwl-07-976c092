@@ -357,6 +357,9 @@ interface DefectCardProps {
   onReopen: (defectId: string) => void;
   onDelete: (defectId: string) => void;
   isHistory?: boolean;
+  statusTransitions?: { label: string; colorClass?: string; from: string; to: string; requiredFields?: string[] }[];
+  onStatusTransition?: (recordId: string, transitionIndex: number) => void;
+  sourceRecordId?: string;
 }
 
 function DefectCard({
@@ -370,7 +373,10 @@ function DefectCard({
   onReject,
   onReopen,
   onDelete,
-  isHistory = false
+  isHistory = false,
+  statusTransitions,
+  onStatusTransition,
+  sourceRecordId
 }: DefectCardProps) {
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString("zh-CN", {
@@ -496,6 +502,17 @@ function DefectCard({
               </label>
             </div>
             <div className="defect-actions-row">
+              {statusTransitions && statusTransitions.length > 0 && onStatusTransition && sourceRecordId && (
+                statusTransitions.map((transition, tIdx) => (
+                  <button
+                    key={`pending-${transition.from}-${transition.to}`}
+                    className={`status-transition-btn ${transition.colorClass || ""}`}
+                    onClick={() => onStatusTransition(sourceRecordId, tIdx)}
+                  >
+                    {transition.label}
+                  </button>
+                ))
+              )}
               <button
                 className="defect-start-btn"
                 onClick={() => onStartProcessing(defect.id)}
@@ -529,6 +546,17 @@ function DefectCard({
               />
             </label>
             <div className="defect-actions-row">
+              {statusTransitions && statusTransitions.length > 0 && onStatusTransition && sourceRecordId && (
+                statusTransitions.map((transition, tIdx) => (
+                  <button
+                    key={`processing-${transition.from}-${transition.to}`}
+                    className={`status-transition-btn ${transition.colorClass || ""}`}
+                    onClick={() => onStatusTransition(sourceRecordId, tIdx)}
+                  >
+                    {transition.label}
+                  </button>
+                ))
+              )}
               <button
                 className="defect-reject-btn"
                 onClick={() => onReject(defect.id)}
@@ -547,6 +575,20 @@ function DefectCard({
 
         {isHistory && (
           <div className="defect-history-actions">
+            {statusTransitions && statusTransitions.length > 0 && onStatusTransition && sourceRecordId && (
+              <div className="defect-status-transitions">
+                <span className="defect-transition-label">记录状态操作：</span>
+                {statusTransitions.map((transition, tIdx) => (
+                  <button
+                    key={`${transition.from}-${transition.to}`}
+                    className={`status-transition-btn ${transition.colorClass || ""}`}
+                    onClick={() => onStatusTransition(sourceRecordId, tIdx)}
+                  >
+                    {transition.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               className="defect-reopen-btn"
               onClick={() => onReopen(defect.id)}
@@ -1204,6 +1246,93 @@ function App() {
       });
     } catch (error) {
       console.error("Failed to save release review:", error);
+    }
+  };
+
+  const handleStatusTransition = async (
+    recordId: string,
+    transitionIndex: number
+  ) => {
+    const record = reviewRecords.find(r => r.id === recordId);
+    if (!record) return;
+    const config = findRecordWorkflowConfig(record);
+    if (!config) {
+      alert("未找到该记录对应的工作流配置");
+      return;
+    }
+    const transitions = getAvailableStatusTransitions(config, record.status, activeRole);
+    const transition = transitions[transitionIndex];
+    if (!transition) {
+      alert("无效的状态流转操作");
+      return;
+    }
+    const requiredFieldKeys = transition.requiredFields ?? [];
+    if (requiredFieldKeys.length > 0) {
+      const requiredFieldConfigs = requiredFieldKeys
+        .map(key => config.fields.find(f => f.key === key))
+        .filter((f): f is FieldConfig => Boolean(f));
+      const recordData = record as unknown as Record<string, string>;
+      const missingFields: string[] = [];
+      requiredFieldConfigs.forEach(field => {
+        const value = recordData[field.key] || "";
+        if (value.trim() === "") {
+          missingFields.push(field.label);
+        }
+      });
+      if (missingFields.length > 0) {
+        alert(`执行"${transition.label}"前请填写：${missingFields.join("、")}`);
+        return;
+      }
+    }
+    const confirmed = window.confirm(
+      `确认执行"${transition.label}"操作？\n状态将从「${transition.from}」变更为「${transition.to}」`
+    );
+    if (!confirmed) return;
+    const fromStatus = record.status;
+    const toStatus = transition.to;
+    try {
+      const updatedRecord = { ...record, status: toStatus };
+      await updateRecord(updatedRecord);
+      setReviewRecords(prev => prev.map(r => r.id === recordId ? updatedRecord : r));
+      await recordStatusChange(
+        recordId,
+        fromStatus,
+        toStatus,
+        `${activeRole}执行"${transition.label}"操作`
+      );
+      if (toStatus === "缺陷") {
+        const existingDefect = Object.values(defects).find(d => d.sourceRecordId === recordId);
+        if (!existingDefect) {
+          const defect = await createDefectFromRecord(updatedRecord);
+          setDefects(prev => ({ ...prev, [defect.id]: defect }));
+        }
+      }
+      if (fromStatus === "缺陷" && toStatus === "正常") {
+        const relatedDefect = Object.values(defects).find(
+          d => d.sourceRecordId === recordId && (d.status === "pending" || d.status === "processing")
+        );
+        if (relatedDefect) {
+          const now = Date.now();
+          const updatedDefect: DefectItem = {
+            ...relatedDefect,
+            status: "completed",
+            completedNote: `关联检查记录状态已流转为"正常"，缺陷自动关闭`,
+            completedAt: now,
+            updatedAt: now
+          };
+          await updateDefect(updatedDefect);
+          setDefects(prev => ({ ...prev, [relatedDefect.id]: updatedDefect }));
+        }
+      }
+      if (releaseReviews[recordId] && toStatus === "待复核") {
+        setReleaseReviews(prev => {
+          const next = { ...prev };
+          delete next[recordId];
+          return next;
+        });
+      }
+    } catch (error) {
+      console.error("Failed to execute status transition:", error);
     }
   };
 
@@ -2680,13 +2809,19 @@ function App() {
                     <p>暂无待处理缺陷。请在下方"近期记录"中点击缺陷项的"生成缺陷"按钮，将缺陷加入待处理清单。</p>
                   </div>
                 ) : (
-                  groupedDefects.pending.map((defect, index) => (
+                  groupedDefects.pending.map((defect, index) => {
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
+                    const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
+                    const transitions = srcRecord && srcConfig
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
+                      : [];
+                    return (
                     <DefectCard
                       key={defect.id}
                       defect={defect}
                       index={index}
                       formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
-                      sourceRecord={getDefectSourceRecord(defect.sourceRecordId)}
+                      sourceRecord={srcRecord}
                       onFormChange={handleDefectFormChange}
                       onStartProcessing={handleStartProcessing}
                       onComplete={handleCompleteDefect}
@@ -2694,8 +2829,12 @@ function App() {
                       onReopen={handleReopenDefect}
                       onDelete={handleDeleteDefect}
                       isHistory={false}
+                      statusTransitions={transitions.length > 0 ? transitions : undefined}
+                      onStatusTransition={handleStatusTransition}
+                      sourceRecordId={srcRecord?.id}
                     />
-                  ))
+                    );
+                  })
                 )}
               </div>
             ) : (
@@ -2705,13 +2844,19 @@ function App() {
                     <p>暂无历史缺陷记录。</p>
                   </div>
                 ) : (
-                  groupedDefects.history.map((defect, index) => (
+                  groupedDefects.history.map((defect, index) => {
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
+                    const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
+                    const transitions = srcRecord && srcConfig
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
+                      : [];
+                    return (
                     <DefectCard
                       key={defect.id}
                       defect={defect}
                       index={index}
                       formValues={defectFormValues[defect.id] || { handlingOpinion: "", assignedSigner: "", rejectedReason: "", completedNote: "" }}
-                      sourceRecord={getDefectSourceRecord(defect.sourceRecordId)}
+                      sourceRecord={srcRecord}
                       onFormChange={handleDefectFormChange}
                       onStartProcessing={handleStartProcessing}
                       onComplete={handleCompleteDefect}
@@ -2719,8 +2864,12 @@ function App() {
                       onReopen={handleReopenDefect}
                       onDelete={handleDeleteDefect}
                       isHistory={true}
+                      statusTransitions={transitions.length > 0 ? transitions : undefined}
+                      onStatusTransition={handleStatusTransition}
+                      sourceRecordId={srcRecord?.id}
                     />
-                  ))
+                    );
+                  })
                 )}
               </div>
             )}
@@ -2750,6 +2899,9 @@ function App() {
                     const recordHistory = statusHistory[record.id] || [];
                     const isExpanded = activeHistoryRecordId === record.id;
                     const releaseReview = releaseReviews[record.id];
+                    const availableTransitions = recordConfig
+                      ? getAvailableStatusTransitions(recordConfig, record.status, activeRole)
+                      : [];
                     return (
                       <article key={record.id} className="record-card">
                         <div className={`record-index ${hasDefect ? "record-index-defect" : ""}`}>
@@ -2778,6 +2930,15 @@ function App() {
                           </p>
                         </div>
                         <div className="record-actions">
+                          {availableTransitions.map((transition, tIdx) => (
+                            <button
+                              key={`${transition.from}-${transition.to}`}
+                              className={`status-transition-btn ${transition.colorClass || ""}`}
+                              onClick={() => handleStatusTransition(record.id, tIdx)}
+                            >
+                              {transition.label}
+                            </button>
+                          ))}
                           {activeRole !== "培训教员" && (
                             <button
                               className="save-as-template-btn"
