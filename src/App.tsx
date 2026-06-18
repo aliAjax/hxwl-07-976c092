@@ -55,6 +55,7 @@ import {
   canCreateDefect,
   getInitialStatus,
   StatusCategory,
+  getStatusCategory,
   getRoleVisibleFields,
   canRolePerformAction,
   getRoleEditableFields,
@@ -792,6 +793,8 @@ function App() {
     ataChapter: string;
     records: ReviewRecord[];
   } | null>(null);
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [batchOpinion, setBatchOpinion] = useState("");
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(navigator.onLine ? "online" : "offline");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
   const [syncQueue, setSyncQueue] = useState<SyncOperation[]>([]);
@@ -1330,6 +1333,139 @@ function App() {
       });
     } catch (error) {
       console.error("Failed to save release review:", error);
+    }
+  };
+
+  const handleToggleSelectRecord = (recordId: string) => {
+    setSelectedRecordIds(prev => {
+      const next = new Set(prev);
+      if (next.has(recordId)) {
+        next.delete(recordId);
+      } else {
+        next.add(recordId);
+      }
+      return next;
+    });
+  };
+
+  const getPendingRecordsInDetail = () => {
+    if (!matrixDetailData) return [];
+    return matrixDetailData.records.filter(r => {
+      const category = getStatusCategory(r.status);
+      const isReviewed = !!releaseReviews[r.id];
+      return category === "pending" && !isReviewed;
+    });
+  };
+
+  const getDefectRecordsInDetail = () => {
+    if (!matrixDetailData) return [];
+    return matrixDetailData.records.filter(r => {
+      const category = getStatusCategory(r.status);
+      return category === "defect";
+    });
+  };
+
+  const getNormalRecordsInDetail = () => {
+    if (!matrixDetailData) return [];
+    return matrixDetailData.records.filter(r => {
+      const category = getStatusCategory(r.status);
+      const isReviewed = !!releaseReviews[r.id];
+      return category === "normal" || (category === "pending" && isReviewed);
+    });
+  };
+
+  const handleToggleSelectAllPending = () => {
+    const pendingRecords = getPendingRecordsInDetail();
+    const pendingIds = pendingRecords.map(r => r.id);
+    const allSelected = pendingIds.every(id => selectedRecordIds.has(id));
+    if (allSelected) {
+      setSelectedRecordIds(new Set());
+    } else {
+      setSelectedRecordIds(new Set(pendingIds));
+    }
+  };
+
+  const handleBatchReview = async () => {
+    const pendingRecords = getPendingRecordsInDetail();
+    const selectedPending = pendingRecords.filter(r => selectedRecordIds.has(r.id));
+    if (selectedPending.length === 0) {
+      alert("请先选择要批量复核的待复核记录");
+      return;
+    }
+    const confirmed = window.confirm(
+      `确认批量通过 ${selectedPending.length} 条待复核记录？\n复核意见：${batchOpinion || "（无意见）"}`
+    );
+    if (!confirmed) return;
+    try {
+      const now = Date.now();
+      const newReviews: ReleaseReviewResult[] = [];
+      const updatedRecords: ReviewRecord[] = [];
+      const historyItems: StatusHistoryItem[] = [];
+      for (const record of selectedPending) {
+        const isDefect = record.status.includes("缺陷");
+        const review: ReleaseReviewResult = {
+          recordId: record.id,
+          status: "passed",
+          opinion: batchOpinion,
+          reviewer: "放行人员",
+          reviewedAt: now
+        };
+        newReviews.push(review);
+        const newStatus = isDefect ? "缺陷" : "正常";
+        if (record.status !== newStatus || (batchOpinion && batchOpinion !== record.handling)) {
+          const updatedRecord = { ...record, status: newStatus, handling: batchOpinion || record.handling };
+          updatedRecords.push(updatedRecord);
+          if (record.status !== newStatus) {
+            const historyItem: StatusHistoryItem = {
+              id: `hist-${now}-${Math.random().toString(36).slice(2, 7)}`,
+              recordId: record.id,
+              fromStatus: record.status,
+              toStatus: newStatus,
+              operatorRole: activeRole as DBUserRole,
+              operatorName: activeRole,
+              changedAt: now,
+              remark: `批量放行通过：${batchOpinion || "无意见"}`
+            };
+            historyItems.push(historyItem);
+          }
+        }
+      }
+      for (const review of newReviews) {
+        await saveReleaseReview(review);
+      }
+      for (const record of updatedRecords) {
+        await updateRecord(record);
+      }
+      for (const history of historyItems) {
+        await addStatusHistory(history);
+      }
+      setReleaseReviews(prev => {
+        const next = { ...prev };
+        newReviews.forEach(r => { next[r.recordId] = r; });
+        return next;
+      });
+      setReviewRecords(prev => {
+        const next = [...prev];
+        updatedRecords.forEach(ur => {
+          const idx = next.findIndex(r => r.id === ur.id);
+          if (idx !== -1) next[idx] = ur;
+        });
+        return next;
+      });
+      setStatusHistory(prev => {
+        const next = { ...prev };
+        historyItems.forEach(h => {
+          if (!next[h.recordId]) next[h.recordId] = [];
+          next[h.recordId] = [h, ...next[h.recordId]];
+        });
+        return next;
+      });
+      setSelectedRecordIds(new Set());
+      setBatchOpinion("");
+      alert(`已成功批量通过 ${selectedPending.length} 条记录`);
+    } catch (error) {
+      console.error("Failed to batch review:", error);
+      alert("批量复核失败，请重试");
     }
   };
 
@@ -1887,12 +2023,16 @@ function App() {
   const handleMatrixCellClick = (aircraftType: string, ataChapter: string) => {
     const records = matrixData.matrix[aircraftType]?.[ataChapter] || [];
     setMatrixDetailData({ aircraftType, ataChapter, records });
+    setSelectedRecordIds(new Set());
+    setBatchOpinion("");
     setIsMatrixDetailOpen(true);
   };
 
   const closeMatrixDetail = () => {
     setIsMatrixDetailOpen(false);
     setMatrixDetailData(null);
+    setSelectedRecordIds(new Set());
+    setBatchOpinion("");
   };
 
   const handleFormChange = (field: keyof FormValues, value: string) => {
@@ -3836,7 +3976,7 @@ function App() {
 
       {isMatrixDetailOpen && matrixDetailData && (
         <div className="modal-overlay" onClick={closeMatrixDetail}>
-          <div className="matrix-detail-content" onClick={e => e.stopPropagation()}>
+          <div className="matrix-detail-content matrix-detail-large" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>
                 {matrixDetailData.aircraftType} - {matrixDetailData.ataChapter}
@@ -3846,44 +3986,210 @@ function App() {
               </h2>
               <button className="close-btn" onClick={closeMatrixDetail}>×</button>
             </div>
-            <div className="modal-body">
+            <div className="modal-body matrix-detail-body">
               {matrixDetailData.records.length === 0 ? (
                 <div className="empty-state">
                   <p>该机型章节下暂无记录</p>
                 </div>
               ) : (
-                <div className="matrix-detail-list">
-                  {matrixDetailData.records.map((record, index) => (
-                    <article key={record.id} className="detail-card">
-                      <div className="detail-card-header">
-                        <div className="detail-card-index">{String(index + 1).padStart(2, "0")}</div>
-                        <div className="detail-card-title">
-                          <div className="detail-card-top">
-                            <h3>{record.checkArea}</h3>
-                            <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
-                              {record.status}
-                            </span>
-                          </div>
-                          {record.checkItem && (
-                            <p className="detail-check-item">{record.checkItem}</p>
-                          )}
+                <>
+                  {activeRole === "放行人员" && getPendingRecordsInDetail().length > 0 && (
+                    <div className="batch-operation-bar">
+                      <div className="batch-operation-header">
+                        <span className="batch-operation-title">批量复核</span>
+                        <label className="select-all-label">
+                          <input
+                            type="checkbox"
+                            checked={getPendingRecordsInDetail().length > 0 && getPendingRecordsInDetail().every(r => selectedRecordIds.has(r.id))}
+                            onChange={handleToggleSelectAllPending}
+                          />
+                          全选待复核 ({getPendingRecordsInDetail().length}条)
+                        </label>
+                        <span className="selected-count">
+                          已选 {selectedRecordIds.size} 条
+                        </span>
+                      </div>
+                      <div className="batch-opinion-section">
+                        <label className="batch-opinion-label">批量复核意见</label>
+                        <textarea
+                          className="batch-opinion-textarea"
+                          placeholder="请输入批量复核意见（可选）..."
+                          rows={2}
+                          value={batchOpinion}
+                          onChange={e => setBatchOpinion(e.target.value)}
+                        />
+                      </div>
+                      <div className="batch-actions">
+                        <button
+                          className="batch-pass-btn"
+                          onClick={handleBatchReview}
+                          disabled={selectedRecordIds.size === 0}
+                        >
+                          批量通过 ({selectedRecordIds.size})
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="detail-groups">
+                    {getPendingRecordsInDetail().length > 0 && (
+                      <div className="detail-group">
+                        <div className="detail-group-header detail-group-watch">
+                          <h3>待复核</h3>
+                          <span className="group-count">{getPendingRecordsInDetail().length}</span>
+                        </div>
+                        <div className="detail-group-list">
+                          {getPendingRecordsInDetail().map((record, index) => {
+                            const isSelected = selectedRecordIds.has(record.id);
+                            const isReviewed = !!releaseReviews[record.id];
+                            return (
+                              <article
+                                key={record.id}
+                                className={`detail-card detail-card-selectable ${isSelected ? "selected" : ""}`}
+                              >
+                                <div className="detail-card-header">
+                                  {activeRole === "放行人员" && !isReviewed && (
+                                    <div className="detail-card-checkbox">
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={() => handleToggleSelectRecord(record.id)}
+                                      />
+                                    </div>
+                                  )}
+                                  <div className="detail-card-index">{String(index + 1).padStart(2, "0")}</div>
+                                  <div className="detail-card-title">
+                                    <div className="detail-card-top">
+                                      <h3>{record.checkArea}</h3>
+                                      <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+                                        {record.status}
+                                      </span>
+                                      {isReviewed && (
+                                        <span className="review-badge review-badge-pass">已复核</span>
+                                      )}
+                                    </div>
+                                    {record.checkItem && (
+                                      <p className="detail-check-item">{record.checkItem}</p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="detail-card-body">
+                                  <div className="detail-section">
+                                    <span className="detail-label">缺陷描述：</span>
+                                    <span>{record.defectDesc || "无"}</span>
+                                  </div>
+                                  {record.handling && (
+                                    <div className="detail-section">
+                                      <span className="detail-label">处理意见：</span>
+                                      <span>{record.handling}</span>
+                                    </div>
+                                  )}
+                                  {isReviewed && releaseReviews[record.id] && (
+                                    <div className="detail-section detail-review-result">
+                                      <span className="detail-label">复核意见：</span>
+                                      <span>{releaseReviews[record.id].opinion || "无"}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </article>
+                            );
+                          })}
                         </div>
                       </div>
-                      <div className="detail-card-body">
-                        <div className="detail-section">
-                          <span className="detail-label">缺陷描述：</span>
-                          <span>{record.defectDesc || "无"}</span>
+                    )}
+
+                    {getDefectRecordsInDetail().length > 0 && (
+                      <div className="detail-group">
+                        <div className="detail-group-header detail-group-danger">
+                          <h3>缺陷记录（需逐条处置）</h3>
+                          <span className="group-count">{getDefectRecordsInDetail().length}</span>
                         </div>
-                        {record.handling && (
-                          <div className="detail-section">
-                            <span className="detail-label">处理意见：</span>
-                            <span>{record.handling}</span>
-                          </div>
-                        )}
+                        <div className="detail-group-list">
+                          {getDefectRecordsInDetail().map((record, index) => {
+                            const review = releaseReviews[record.id];
+                            const opinion = releaseOpinions[record.id] || "";
+                            const history = statusHistory[record.id];
+                            const showHistory = activeHistoryRecordId === record.id;
+                            return (
+                              <ReleaseReviewCard
+                                key={record.id}
+                                record={record}
+                                index={index}
+                                review={review}
+                                opinion={opinion}
+                                onOpinionChange={handleReleaseOpinionChange}
+                                onReview={handleReleaseReview}
+                                recordType="defect"
+                                history={history}
+                                showHistory={showHistory}
+                                onToggleHistory={(id) => setActiveHistoryRecordId(
+                                  activeHistoryRecordId === id ? null : id
+                                )}
+                              />
+                            );
+                          })}
+                        </div>
                       </div>
-                    </article>
-                  ))}
-                </div>
+                    )}
+
+                    {getNormalRecordsInDetail().length > 0 && (
+                      <div className="detail-group">
+                        <div className="detail-group-header detail-group-ok">
+                          <h3>正常记录</h3>
+                          <span className="group-count">{getNormalRecordsInDetail().length}</span>
+                        </div>
+                        <div className="detail-group-list">
+                          {getNormalRecordsInDetail().map((record, index) => {
+                            const review = releaseReviews[record.id];
+                            return (
+                              <article key={record.id} className="detail-card">
+                                <div className="detail-card-header">
+                                  <div className="detail-card-index detail-card-index-ok">
+                                    {String(index + 1).padStart(2, "0")}
+                                  </div>
+                                  <div className="detail-card-title">
+                                    <div className="detail-card-top">
+                                      <h3>{record.checkArea}</h3>
+                                      <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
+                                        {record.status}
+                                      </span>
+                                      {review && (
+                                        <span className={`review-badge ${review.status === "passed" ? "review-badge-pass" : "review-badge-reject"}`}>
+                                          {review.status === "passed" ? "已通过" : "已驳回"}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {record.checkItem && (
+                                      <p className="detail-check-item">{record.checkItem}</p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="detail-card-body">
+                                  <div className="detail-section">
+                                    <span className="detail-label">缺陷描述：</span>
+                                    <span>{record.defectDesc || "无"}</span>
+                                  </div>
+                                  {record.handling && (
+                                    <div className="detail-section">
+                                      <span className="detail-label">处理意见：</span>
+                                      <span>{record.handling}</span>
+                                    </div>
+                                  )}
+                                  {review && (
+                                    <div className="detail-section detail-review-result">
+                                      <span className="detail-label">复核意见：</span>
+                                      <span>{review.opinion || "无"}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
             </div>
             <div className="modal-footer">
