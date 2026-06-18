@@ -70,6 +70,8 @@ export type DefectState = Record<string, DefectItem>;
 
 export type UserRole = "维修工程师" | "放行人员" | "培训教员";
 
+export type TrainingCommentStatus = "待讲评" | "需复训" | "已闭环";
+
 export interface StatusHistoryItem {
   id: string;
   recordId: string;
@@ -89,6 +91,7 @@ export interface TrainingComment {
   recordId: string;
   comment: string;
   trainer: string;
+  status: TrainingCommentStatus;
   createdAt: number;
   updatedAt: number;
 }
@@ -96,7 +99,7 @@ export interface TrainingComment {
 export type TrainingCommentState = Record<string, TrainingComment>;
 
 const DB_NAME = "hxwl-07-aviation-maintenance";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 const STORE_TEMPLATES = "templates";
 const STORE_RECORDS = "records";
@@ -233,6 +236,24 @@ function openDB(): Promise<IDBDatabase> {
         const commentStore = db.createObjectStore(STORE_TRAINING_COMMENTS, { keyPath: "recordId" });
         commentStore.createIndex("trainer", "trainer", { unique: false });
         commentStore.createIndex("createdAt", "createdAt", { unique: false });
+        commentStore.createIndex("status", "status", { unique: false });
+      } else {
+        const commentStore = event.target!.transaction!.objectStore(STORE_TRAINING_COMMENTS);
+        if (!commentStore.indexNames.contains("status")) {
+          commentStore.createIndex("status", "status", { unique: false });
+        }
+        const migrateCursor = commentStore.openCursor();
+        migrateCursor.onsuccess = () => {
+          const cursor = migrateCursor.result;
+          if (cursor) {
+            const value = cursor.value as any;
+            if (!value.status) {
+              value.status = value.comment && value.comment.trim().length > 0 ? "已闭环" : "待讲评";
+              cursor.update(value);
+            }
+            cursor.continue();
+          }
+        };
       }
     };
   });
@@ -585,7 +606,13 @@ export async function getTrainingComment(recordId: string): Promise<TrainingComm
   return withDB(STORE_TRAINING_COMMENTS, "readonly", (store) => {
     return new Promise<TrainingComment | undefined>((resolve, reject) => {
       const request = store.get(recordId);
-      request.onsuccess = () => resolve(request.result as TrainingComment | undefined);
+      request.onsuccess = () => {
+        const result = request.result as TrainingComment | undefined;
+        if (result && !result.status) {
+          result.status = result.comment && result.comment.trim().length > 0 ? "已闭环" : "待讲评";
+        }
+        resolve(result);
+      };
       request.onerror = () => reject(request.error);
     });
   });
@@ -598,6 +625,9 @@ export async function getAllTrainingComments(): Promise<TrainingCommentState> {
       request.onsuccess = () => {
         const comments: TrainingCommentState = {};
         (request.result as TrainingComment[]).forEach(c => {
+          if (!c.status) {
+            c.status = c.comment && c.comment.trim().length > 0 ? "已闭环" : "待讲评";
+          }
           comments[c.recordId] = c;
         });
         resolve(comments);

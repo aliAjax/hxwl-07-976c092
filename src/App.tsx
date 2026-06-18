@@ -12,6 +12,7 @@ import {
   StatusHistoryState,
   TrainingComment,
   TrainingCommentState,
+  TrainingCommentStatus,
   UserRole as DBUserRole,
   initializeDatabase,
   addTemplate,
@@ -812,6 +813,7 @@ function App() {
       recordId,
       comment,
       trainer: activeRole,
+      status: existing?.status || (comment.trim().length > 0 ? "已闭环" : "待讲评"),
       createdAt: existing?.createdAt || now,
       updatedAt: now
     };
@@ -820,6 +822,26 @@ function App() {
       setTrainingComments(prev => ({ ...prev, [recordId]: newComment }));
     } catch (error) {
       console.error("Failed to save training comment:", error);
+    }
+  };
+
+  const handleTrainingCommentStatusChange = async (recordId: string, status: TrainingCommentStatus) => {
+    const now = Date.now();
+    const existing = trainingComments[recordId];
+    const newComment: TrainingComment = {
+      id: existing?.id || `tc-${now}`,
+      recordId,
+      comment: existing?.comment || "",
+      trainer: activeRole,
+      status,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    try {
+      await saveTrainingComment(newComment);
+      setTrainingComments(prev => ({ ...prev, [recordId]: newComment }));
+    } catch (error) {
+      console.error("Failed to save training comment status:", error);
     }
   };
 
@@ -1097,6 +1119,24 @@ function App() {
     });
     return { total, defect, pending, normal, commented };
   }, [filteredRecords, reviewNotes]);
+
+  const trainingCommentStats = useMemo(() => {
+    let pendingReview = 0;
+    let needRetraining = 0;
+    let closed = 0;
+    filteredRecords.forEach(r => {
+      const comment = trainingComments[r.id];
+      const status = comment?.status;
+      if (status === "待讲评" || !status) {
+        pendingReview++;
+      } else if (status === "需复训") {
+        needRetraining++;
+      } else if (status === "已闭环") {
+        closed++;
+      }
+    });
+    return { pendingReview, needRetraining, closed };
+  }, [filteredRecords, trainingComments]);
 
   const handleReviewNoteChange = async (recordId: string, value: string) => {
     setReviewNotes(prev => ({ ...prev, [recordId]: value }));
@@ -2426,13 +2466,17 @@ function App() {
               <span>缺陷项</span>
               <strong>{reviewStats.defect}</strong>
             </div>
-            <div className="review-metric review-metric-primary">
-              <span>已讲评</span>
-              <strong>{filteredRecords.filter(r => trainingComments[r.id]?.comment?.trim()).length}</strong>
-            </div>
             <div className="review-metric review-metric-watch">
               <span>待讲评</span>
-              <strong>{filteredRecords.length - filteredRecords.filter(r => trainingComments[r.id]?.comment?.trim()).length}</strong>
+              <strong>{trainingCommentStats.pendingReview}</strong>
+            </div>
+            <div className="review-metric review-metric-warn">
+              <span>需复训</span>
+              <strong>{trainingCommentStats.needRetraining}</strong>
+            </div>
+            <div className="review-metric review-metric-primary">
+              <span>已闭环</span>
+              <strong>{trainingCommentStats.closed}</strong>
             </div>
           </div>
 
@@ -2536,9 +2580,14 @@ function App() {
                       <div className="comment-section">
                         <div className="section-label">
                           培训讲评备注
-                          {commentData?.comment?.trim().length > 0 && (
-                            <span className="comment-indicator">已填写</span>
-                          )}
+                          {(() => {
+                            const status = commentData?.status || "待讲评";
+                            return (
+                              <span className={`training-status-badge training-status-${status}`}>
+                                {status}
+                              </span>
+                            );
+                          })()}
                           {commentData?.updatedAt && (
                             <span className="reviewer-info">
                               最后更新：{new Date(commentData.updatedAt).toLocaleString("zh-CN", {
@@ -2554,6 +2603,21 @@ function App() {
                           value={commentData?.comment || ""}
                           onChange={e => handleTrainingCommentChange(record.id, e.target.value)}
                         />
+                        <div className="training-status-selector">
+                          <span className="status-selector-label">标记状态：</span>
+                          {(["待讲评", "需复训", "已闭环"] as TrainingCommentStatus[]).map(status => {
+                            const currentStatus = commentData?.status || "待讲评";
+                            return (
+                              <button
+                                key={status}
+                                className={`training-status-btn training-status-btn-${status} ${currentStatus === status ? "active" : ""}`}
+                                onClick={() => handleTrainingCommentStatusChange(record.id, status)}
+                              >
+                                {status}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   </article>
@@ -2697,6 +2761,11 @@ function App() {
                             <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
                               {record.status}
                             </span>
+                            {trainingComments[record.id] && (
+                              <span className={`training-status-badge training-status-${trainingComments[record.id].status || "待讲评"}`}>
+                                {trainingComments[record.id].status || "待讲评"}
+                              </span>
+                            )}
                             <button
                               className="history-btn history-btn-sm"
                               onClick={() => setActiveHistoryRecordId(
@@ -2771,10 +2840,18 @@ function App() {
                                 </div>
                               </div>
                             )}
-                            {trainingComments[record.id]?.comment && (
+                            {trainingComments[record.id] && (
                               <div className="comment-section">
                                 <div className="section-label">
                                   培训讲评
+                                  {(() => {
+                                    const status = trainingComments[record.id].status || "待讲评";
+                                    return (
+                                      <span className={`training-status-badge training-status-${status}`}>
+                                        {status}
+                                      </span>
+                                    );
+                                  })()}
                                   <span className="reviewer-info">
                                     {trainingComments[record.id].trainer} · {new Date(trainingComments[record.id].updatedAt).toLocaleString("zh-CN", {
                                       month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
@@ -2782,7 +2859,7 @@ function App() {
                                   </span>
                                 </div>
                                 <div className="comment-display">
-                                  {trainingComments[record.id].comment}
+                                  {trainingComments[record.id].comment || "暂无讲评内容"}
                                 </div>
                               </div>
                             )}
