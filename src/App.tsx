@@ -2201,6 +2201,20 @@ function App() {
       workflowConfigId: currentWorkflowConfig?.id
     };
 
+    const formAny = formValues as Record<string, any>;
+    const baseKeys = new Set([
+      "aircraftType", "ataChapter", "checkArea", "checkItem",
+      "status", "defectDesc", "handling", "signer"
+    ]);
+    Object.keys(formAny).forEach(key => {
+      if (!baseKeys.has(key) && formAny[key] !== undefined && formAny[key] !== null && String(formAny[key]).trim() !== "") {
+        (newRecord as any)[key] = formAny[key];
+      }
+    });
+    if (formAny.signer && formAny.signer.trim()) {
+      newRecord.signer = formAny.signer;
+    }
+
     try {
       await addRecord(newRecord);
       setReviewRecords(prev => [...prev, newRecord]);

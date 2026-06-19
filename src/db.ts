@@ -25,6 +25,7 @@ export interface ReviewRecord {
   defectDesc: string;
   handling: string;
   workflowConfigId?: string;
+  [key: string]: any;
 }
 
 export interface ReviewNote {
