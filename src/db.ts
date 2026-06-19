@@ -24,6 +24,7 @@ export interface ReviewRecord {
   status: string;
   defectDesc: string;
   handling: string;
+  workflowConfigId?: string;
 }
 
 export interface ReviewNote {
@@ -103,7 +104,7 @@ export interface TrainingComment {
 export type TrainingCommentState = Record<string, TrainingComment>;
 
 const DB_NAME = "hxwl-07-aviation-maintenance";
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 const STORE_TEMPLATES = "templates";
 const STORE_RECORDS = "records";
@@ -284,6 +285,13 @@ function openDB(): Promise<IDBDatabase> {
             cursor.continue();
           }
         };
+      }
+
+      if (!db.objectStoreNames.contains("workflowConfigs")) {
+        const wfConfigStore = db.createObjectStore("workflowConfigs", { keyPath: "id" });
+        wfConfigStore.createIndex("aircraftType", "aircraftType", { unique: false });
+        wfConfigStore.createIndex("ataChapter", "ataChapter", { unique: false });
+        wfConfigStore.createIndex("checkArea", "checkArea", { unique: false });
       }
     };
   });

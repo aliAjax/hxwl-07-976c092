@@ -71,6 +71,11 @@ export interface WorkflowConfig {
       canReview?: boolean;
     };
   };
+  _builtIn?: boolean;
+  _fallback?: boolean;
+  _updatedAt?: number;
+  _seededAt?: number;
+  workflowConfigId?: string;
 }
 
 export interface WorkflowEngineState {
@@ -117,6 +122,42 @@ export function findWorkflowConfig(
          c.ataChapter === ataChapter &&
          c.checkArea === checkArea
   );
+}
+
+export function findWorkflowConfigById(
+  configs: WorkflowConfig[],
+  id: string
+): WorkflowConfig | undefined {
+  return configs.find(c => c.id === id);
+}
+
+export interface RecordWithConfigInfo {
+  id: string;
+  aircraftType: string;
+  ataChapter: string;
+  checkArea: string;
+  status?: string;
+  workflowConfigId?: string;
+  [key: string]: any;
+}
+
+export function resolveRecordConfig(
+  configs: WorkflowConfig[],
+  record: RecordWithConfigInfo
+): { config: WorkflowConfig | undefined; source: "id" | "match" | "none" } {
+  if (record.workflowConfigId) {
+    const byId = findWorkflowConfigById(configs, record.workflowConfigId);
+    if (byId) {
+      return { config: byId, source: "id" };
+    }
+  }
+
+  const byMatch = findWorkflowConfig(configs, record.aircraftType, record.ataChapter, record.checkArea);
+  if (byMatch) {
+    return { config: byMatch, source: "match" };
+  }
+
+  return { config: undefined, source: "none" };
 }
 
 export function getDefaultWorkflow(configs: WorkflowConfig[]): WorkflowConfig | undefined {
@@ -321,6 +362,30 @@ export function groupRecordsByStatus(
   return groups;
 }
 
+const DEFAULT_FIELD_LABELS: Record<string, string> = {
+  aircraftType: "机型",
+  ataChapter: "ATA章节",
+  checkArea: "检查区域",
+  checkItem: "检查项目",
+  status: "状态",
+  defectDesc: "缺陷描述",
+  handling: "处理意见",
+  signer: "签署人",
+  workOrder: "工单号",
+  workType: "工作类型",
+  inspector: "检查员",
+  date: "日期",
+  remark: "备注",
+  note: "备注",
+  description: "描述"
+};
+
+const DISPLAY_PRIORITY_KEYS = [
+  "aircraftType", "ataChapter", "checkArea", "checkItem",
+  "workOrder", "workType", "status", "defectDesc",
+  "handling", "inspector", "signer", "date", "remark", "note", "description"
+];
+
 export function getRecordDisplayFields(
   config: WorkflowConfig | undefined,
   record: any
@@ -330,26 +395,85 @@ export function getRecordDisplayFields(
   if (config) {
     config.fields.forEach(field => {
       const value = record[field.key];
-      if (value && value.trim() !== "") {
-        fields.push({ label: field.label, value });
-      }
-    });
-  } else {
-    const defaultFields = [
-      { key: "ataChapter", label: "ATA章节" },
-      { key: "checkArea", label: "检查区域" },
-      { key: "status", label: "状态" },
-      { key: "defectDesc", label: "缺陷描述" }
-    ];
-    defaultFields.forEach(field => {
-      const value = record[field.key];
-      if (value && value.trim() !== "") {
-        fields.push({ label: field.label, value });
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        fields.push({ label: field.label, value: String(value) });
       }
     });
   }
 
-  return fields;
+  const shownKeys = new Set(fields.map(f => {
+    const key = Object.keys(record).find(k => {
+      const value = record[k];
+      return value !== undefined && value !== null && String(value).trim() !== "" && fields.some(f => f.value === String(value));
+    });
+    return key || "";
+  }));
+
+  if (fields.length === 0 || shownKeys.size < DISPLAY_PRIORITY_KEYS.filter(k => record[k] !== undefined && record[k] !== null && String(record[k]).trim() !== "").length) {
+    const fallbackFields: { label: string; value: string }[] = [];
+    const alreadyShown = new Set<string>();
+
+    if (config) {
+      config.fields.forEach(field => {
+        const value = record[field.key];
+        if (value !== undefined && value !== null && String(value).trim() !== "") {
+          fallbackFields.push({ label: field.label, value: String(value) });
+          alreadyShown.add(field.key);
+        }
+      });
+    }
+
+    DISPLAY_PRIORITY_KEYS.forEach(key => {
+      if (alreadyShown.has(key) || key === "id") return;
+      const value = record[key];
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        fallbackFields.push({ label: DEFAULT_FIELD_LABELS[key] || key, value: String(value) });
+        alreadyShown.add(key);
+      }
+    });
+
+    Object.keys(record).forEach(key => {
+      if (alreadyShown.has(key) || key === "id" || key === "workflowConfigId" || key.startsWith("_")) return;
+      const value = record[key];
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        fallbackFields.push({ label: DEFAULT_FIELD_LABELS[key] || key, value: String(value) });
+      }
+    });
+
+    return fallbackFields;
+  }
+
+  const shownSet = new Set<string>();
+  const result: { label: string; value: string }[] = [];
+
+  if (config) {
+    config.fields.forEach(field => {
+      const value = record[field.key];
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        result.push({ label: field.label, value: String(value) });
+        shownSet.add(field.key);
+      }
+    });
+  }
+
+  DISPLAY_PRIORITY_KEYS.forEach(key => {
+    if (shownSet.has(key) || key === "id") return;
+    const value = record[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      result.push({ label: DEFAULT_FIELD_LABELS[key] || key, value: String(value) });
+      shownSet.add(key);
+    }
+  });
+
+  Object.keys(record).forEach(key => {
+    if (shownSet.has(key) || key === "id" || key === "workflowConfigId" || key.startsWith("_")) return;
+    const value = record[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      result.push({ label: DEFAULT_FIELD_LABELS[key] || key, value: String(value) });
+    }
+  });
+
+  return result;
 }
 
 export function canCreateDefect(

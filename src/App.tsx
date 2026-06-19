@@ -68,6 +68,14 @@ import {
   getGlobalFilters
 } from "./workflowConfigs";
 import {
+  getAllWorkflowConfigs,
+  saveWorkflowConfig,
+  deleteWorkflowConfig,
+  seedWorkflowConfigs,
+  createDefaultConfig,
+  resetWorkflowConfigsToDefault
+} from "./workflowConfigDB";
+import {
   NetworkStatus,
   SyncStatus,
   SyncOperation,
@@ -769,6 +777,12 @@ function App() {
   });
   const [activeRole, setActiveRole] = useState<UserRole>("维修工程师");
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [workflowConfigsState, setWorkflowConfigsState] = useState<WorkflowConfig[]>(workflowConfigs);
+  const [isConfigManagerOpen, setIsConfigManagerOpen] = useState(false);
+  const [editingConfig, setEditingConfig] = useState<WorkflowConfig | null>(null);
+  const [newConfigAircraftType, setNewConfigAircraftType] = useState("");
+  const [newConfigAtaChapter, setNewConfigAtaChapter] = useState("");
+  const [newConfigCheckArea, setNewConfigCheckArea] = useState("");
 
   interface RecordFilterState {
     aircraftType: string;
@@ -820,6 +834,9 @@ function App() {
         setStatusHistory(data.statusHistory);
         setTrainingComments(data.trainingComments);
         setCacheReady(isStaticCacheAvailable());
+        await seedWorkflowConfigs();
+        const configs = await getAllWorkflowConfigs();
+        setWorkflowConfigsState(configs);
       } catch (error) {
         console.error("Failed to initialize database:", error);
       } finally {
@@ -1015,21 +1032,21 @@ function App() {
 
   const currentWorkflowConfig = useMemo(() => {
     if (formValues.aircraftType && formValues.ataChapter && formValues.checkArea) {
-      return findWorkflowConfig(workflowConfigs, formValues.aircraftType, formValues.ataChapter, formValues.checkArea);
+      return findWorkflowConfig(workflowConfigsState, formValues.aircraftType, formValues.ataChapter, formValues.checkArea);
     }
-    return workflowConfigs[0];
-  }, [formValues.aircraftType, formValues.ataChapter, formValues.checkArea]);
+    return workflowConfigsState[0];
+  }, [formValues.aircraftType, formValues.ataChapter, formValues.checkArea, workflowConfigsState]);
 
-  const availableAircraftTypes = useMemo(() => getAllAircraftTypes(workflowConfigs), []);
+  const availableAircraftTypes = useMemo(() => getAllAircraftTypes(workflowConfigsState), [workflowConfigsState]);
   const availableAtaChapters = useMemo(
-    () => formValues.aircraftType ? getAtaChaptersByAircraft(workflowConfigs, formValues.aircraftType) : [],
-    [formValues.aircraftType]
+    () => formValues.aircraftType ? getAtaChaptersByAircraft(workflowConfigsState, formValues.aircraftType) : [],
+    [formValues.aircraftType, workflowConfigsState]
   );
   const availableCheckAreas = useMemo(
     () => formValues.aircraftType && formValues.ataChapter
-      ? getCheckAreasByAircraftAndAta(workflowConfigs, formValues.aircraftType, formValues.ataChapter)
+      ? getCheckAreasByAircraftAndAta(workflowConfigsState, formValues.aircraftType, formValues.ataChapter)
       : [],
-    [formValues.aircraftType, formValues.ataChapter]
+    [formValues.aircraftType, formValues.ataChapter, workflowConfigsState]
   );
 
   const globalMetrics = useMemo(() => getGlobalMetrics(), []);
@@ -2021,7 +2038,7 @@ function App() {
 
   const getCellStatus = (records: ReviewRecord[]): StatusCategory | "not-started" => {
     if (records.length === 0) return "not-started";
-    const allStatuses = workflowConfigs.flatMap(c => c.statuses);
+    const allStatuses = workflowConfigsState.flatMap(c => c.statuses);
     return getMatrixCellStatus(records, allStatuses);
   };
 
@@ -2045,7 +2062,101 @@ function App() {
   };
 
   const findRecordWorkflowConfig = (record: ReviewRecord): WorkflowConfig | undefined => {
-    return findWorkflowConfig(workflowConfigs, record.aircraftType, record.ataChapter, record.checkArea);
+    if (record.workflowConfigId) {
+      const byId = workflowConfigsState.find(c => c.id === record.workflowConfigId);
+      if (byId) return byId;
+    }
+    const byMatch = findWorkflowConfig(workflowConfigsState, record.aircraftType, record.ataChapter, record.checkArea);
+    if (byMatch) return byMatch;
+    const fallbackConfig: WorkflowConfig = {
+      id: `fallback-${record.aircraftType}-${record.ataChapter}-${record.checkArea}`,
+      aircraftType: record.aircraftType,
+      ataChapter: record.ataChapter,
+      checkArea: record.checkArea,
+      displayName: `${record.aircraftType} ${record.checkArea}检查（兼容模式）`,
+      steps: [
+        { id: "step-1", name: "待复核", description: "维修工程师完成检查后提交复核", fields: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling"], order: 1 },
+        { id: "step-2", name: "正常", description: "放行人员复核通过", fields: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling", "signer"], order: 2 },
+        { id: "step-3", name: "缺陷", description: "存在缺陷需要处理", fields: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling", "signer"], order: 3 }
+      ],
+      fields: [
+        { key: "aircraftType", label: "机型", type: "select", required: true, options: [record.aircraftType], placeholder: "选择机型" },
+        { key: "ataChapter", label: "ATA章节", type: "select", required: true, options: [record.ataChapter], placeholder: "选择ATA章节" },
+        { key: "checkArea", label: "检查区域", type: "select", required: true, options: [record.checkArea], placeholder: "选择检查区域" },
+        { key: "checkItem", label: "检查项目", type: "text", required: false, placeholder: "填写检查项目" },
+        { key: "status", label: "状态", type: "select", required: true, options: ["待复核", "正常", "缺陷"], placeholder: "选择状态" },
+        { key: "defectDesc", label: "缺陷描述", type: "textarea", required: false, placeholder: "填写缺陷描述", fullWidth: true },
+        { key: "handling", label: "处理意见", type: "textarea", required: false, placeholder: "填写处理意见", fullWidth: true },
+        { key: "signer", label: "签署人", type: "text", required: false, placeholder: "填写签署人", fullWidth: true }
+      ],
+      statuses: ["待复核", "正常", "缺陷"],
+      statusTransitions: [
+        { from: "待复核", to: "正常", label: "通过复核", allowedRoles: ["放行人员"], colorClass: "pass-btn" },
+        { from: "待复核", to: "缺陷", label: "标记缺陷", allowedRoles: ["放行人员", "维修工程师"], colorClass: "reject-btn" },
+        { from: "缺陷", to: "正常", label: "修复完成", allowedRoles: ["放行人员"], requiredFields: ["handling"], colorClass: "pass-btn" },
+        { from: "正常", to: "待复核", label: "重新复核", allowedRoles: ["培训教员", "放行人员"], colorClass: "reject-btn" }
+      ],
+      initialStatus: "待复核",
+      metrics: [
+        { key: "completionRate", label: "完成率", type: "percentage", source: "records", filter: { status: ["正常"] }, colorIndex: 0 },
+        { key: "defectCount", label: "缺陷项", type: "count", source: "records", filter: { status: ["缺陷"] }, colorIndex: 2 },
+        { key: "pendingReview", label: "待复核", type: "count", source: "records", filter: { status: ["待复核"] }, colorIndex: 1 }
+      ],
+      filters: [],
+      rolePermissions: {
+        "维修工程师": { canEdit: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling", "status"], canView: true, canCreateDefect: true },
+        "放行人员": { canEdit: ["status", "handling", "signer"], canView: true, canReview: true, canCreateDefect: true },
+        "培训教员": { canEdit: [], canView: true }
+      },
+      _fallback: true
+    };
+    return fallbackConfig;
+  };
+
+  const handleAddWorkflowConfig = async () => {
+    if (!newConfigAircraftType.trim() || !newConfigAtaChapter.trim() || !newConfigCheckArea.trim()) {
+      alert("请填写机型、ATA章节和检查区域");
+      return;
+    }
+    const exists = workflowConfigsState.find(
+      c => c.aircraftType === newConfigAircraftType.trim() &&
+           c.ataChapter === newConfigAtaChapter.trim() &&
+           c.checkArea === newConfigCheckArea.trim()
+    );
+    if (exists) {
+      alert("该机型/ATA章节/检查区域的配置已存在");
+      return;
+    }
+    const newConfig = createDefaultConfig(newConfigAircraftType.trim(), newConfigAtaChapter.trim(), newConfigCheckArea.trim());
+    await saveWorkflowConfig(newConfig);
+    const configs = await getAllWorkflowConfigs();
+    setWorkflowConfigsState(configs);
+    setNewConfigAircraftType("");
+    setNewConfigAtaChapter("");
+    setNewConfigCheckArea("");
+  };
+
+  const handleDeleteWorkflowConfig = async (id: string) => {
+    const confirmed = window.confirm("确认删除此工作流配置？已有记录的展示将退回到兼容模式。");
+    if (!confirmed) return;
+    await deleteWorkflowConfig(id);
+    const configs = await getAllWorkflowConfigs();
+    setWorkflowConfigsState(configs);
+  };
+
+  const handleSaveEditingConfig = async () => {
+    if (!editingConfig) return;
+    await saveWorkflowConfig(editingConfig);
+    const configs = await getAllWorkflowConfigs();
+    setWorkflowConfigsState(configs);
+    setEditingConfig(null);
+  };
+
+  const handleResetWorkflowConfigs = async () => {
+    const confirmed = window.confirm("确认恢复默认工作流配置？自定义配置将被清除。");
+    if (!confirmed) return;
+    const configs = await resetWorkflowConfigsToDefault();
+    setWorkflowConfigsState(configs);
   };
 
   const handleAddRecord = async () => {
@@ -2086,7 +2197,8 @@ function App() {
       checkItem: formValues.checkItem,
       status: formValues.status,
       defectDesc: formValues.defectDesc,
-      handling: formValues.handling
+      handling: formValues.handling,
+      workflowConfigId: currentWorkflowConfig?.id
     };
 
     try {
@@ -2991,6 +3103,428 @@ function App() {
         </section>
       </section>
 
+      <section className="workflow-config-panel">
+        <div className="section-heading">
+          <div>
+            <p>系统配置</p>
+            <h2>工作流配置管理</h2>
+          </div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button className="primary-action" onClick={() => setIsConfigManagerOpen(!isConfigManagerOpen)}>
+              {isConfigManagerOpen ? "收起配置" : "管理配置"}
+            </button>
+            <button className="secondary-action" onClick={handleResetWorkflowConfigs}>
+              恢复默认
+            </button>
+          </div>
+        </div>
+
+        {isConfigManagerOpen && (
+          <div className="config-manager">
+            <div className="config-add-form">
+              <h3>新增工作流配置</h3>
+              <div className="config-add-fields">
+                <label className="config-field">
+                  <span>机型</span>
+                  <input
+                    type="text"
+                    placeholder="如：A350"
+                    value={newConfigAircraftType}
+                    onChange={e => setNewConfigAircraftType(e.target.value)}
+                  />
+                </label>
+                <label className="config-field">
+                  <span>ATA章节</span>
+                  <input
+                    type="text"
+                    placeholder="如：ATA 36"
+                    value={newConfigAtaChapter}
+                    onChange={e => setNewConfigAtaChapter(e.target.value)}
+                  />
+                </label>
+                <label className="config-field">
+                  <span>检查区域</span>
+                  <input
+                    type="text"
+                    placeholder="如：气源系统"
+                    value={newConfigCheckArea}
+                    onChange={e => setNewConfigCheckArea(e.target.value)}
+                  />
+                </label>
+                <button className="primary-action" onClick={handleAddWorkflowConfig}>添加配置</button>
+              </div>
+            </div>
+
+            <div className="config-list">
+              <h3>已有配置 ({workflowConfigsState.length})</h3>
+              {workflowConfigsState.map(config => (
+                <div key={config.id} className="config-card">
+                  {editingConfig?.id === config.id ? (
+                    <div className="config-edit-form">
+                      <div className="config-edit-header">
+                        <strong>{config.displayName}</strong>
+                        <span className="config-meta">{config.aircraftType} · {config.ataChapter} · {config.checkArea}</span>
+                      </div>
+                      <div className="config-edit-section">
+                        <h4>显示名称</h4>
+                        <input
+                          type="text"
+                          value={editingConfig.displayName}
+                          onChange={e => setEditingConfig({ ...editingConfig, displayName: e.target.value })}
+                        />
+                      </div>
+                      <div className="config-edit-section">
+                        <h4>状态列表</h4>
+                        <div className="config-tags">
+                          {editingConfig.statuses.map((status, idx) => (
+                            <span key={idx} className="config-tag">
+                              {status}
+                              <button
+                                className="tag-remove-btn"
+                                onClick={() => {
+                                  const newStatuses = editingConfig.statuses.filter((_, i) => i !== idx);
+                                  setEditingConfig({ ...editingConfig, statuses: newStatuses });
+                                }}
+                              >×</button>
+                            </span>
+                          ))}
+                          <input
+                            type="text"
+                            placeholder="新状态"
+                            className="tag-input"
+                            onKeyDown={e => {
+                              if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                                e.preventDefault();
+                                if (!editingConfig.statuses.includes(e.currentTarget.value.trim())) {
+                                  setEditingConfig({
+                                    ...editingConfig,
+                                    statuses: [...editingConfig.statuses, e.currentTarget.value.trim()]
+                                  });
+                                }
+                                e.currentTarget.value = "";
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div className="config-edit-section">
+                        <h4>初始状态</h4>
+                        <select
+                          value={editingConfig.initialStatus}
+                          onChange={e => setEditingConfig({ ...editingConfig, initialStatus: e.target.value })}
+                        >
+                          {editingConfig.statuses.map(s => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="config-edit-section">
+                        <h4>字段配置</h4>
+                        <div className="config-field-list">
+                          {editingConfig.fields.map((field, idx) => (
+                            <div key={field.key} className="config-field-item">
+                              <span className="field-key">{field.key}</span>
+                              <input
+                                type="text"
+                                value={field.label}
+                                onChange={e => {
+                                  const newFields = [...editingConfig.fields];
+                                  newFields[idx] = { ...newFields[idx], label: e.target.value };
+                                  setEditingConfig({ ...editingConfig, fields: newFields });
+                                }}
+                                placeholder="标签"
+                              />
+                              <select
+                                value={field.type}
+                                onChange={e => {
+                                  const newFields = [...editingConfig.fields];
+                                  newFields[idx] = { ...newFields[idx], type: e.target.value as any };
+                                  setEditingConfig({ ...editingConfig, fields: newFields });
+                                }}
+                              >
+                                <option value="text">文本</option>
+                                <option value="textarea">长文本</option>
+                                <option value="select">选择</option>
+                                <option value="date">日期</option>
+                              </select>
+                              <label className="config-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={field.required}
+                                  onChange={e => {
+                                    const newFields = [...editingConfig.fields];
+                                    newFields[idx] = { ...newFields[idx], required: e.target.checked };
+                                    setEditingConfig({ ...editingConfig, fields: newFields });
+                                  }}
+                                />
+                                必填
+                              </label>
+                              {field.type === "select" && (
+                                <input
+                                  type="text"
+                                  value={field.options?.join(", ") || ""}
+                                  onChange={e => {
+                                    const newFields = [...editingConfig.fields];
+                                    newFields[idx] = { ...newFields[idx], options: e.target.value.split(",").map(s => s.trim()).filter(Boolean) };
+                                    setEditingConfig({ ...editingConfig, fields: newFields });
+                                  }}
+                                  placeholder="选项（逗号分隔）"
+                                  className="options-input"
+                                />
+                              )}
+                              <button
+                                className="tag-remove-btn"
+                                onClick={() => {
+                                  const newFields = editingConfig.fields.filter((_, i) => i !== idx);
+                                  setEditingConfig({ ...editingConfig, fields: newFields });
+                                }}
+                              >×</button>
+                            </div>
+                          ))}
+                          <div className="config-add-field">
+                            <input
+                              type="text"
+                              placeholder="新字段key"
+                              id={`new-field-key-${config.id}`}
+                            />
+                            <input
+                              type="text"
+                              placeholder="标签"
+                              id={`new-field-label-${config.id}`}
+                            />
+                            <button
+                              className="secondary-action"
+                              onClick={() => {
+                                const keyEl = document.getElementById(`new-field-key-${config.id}`) as HTMLInputElement;
+                                const labelEl = document.getElementById(`new-field-label-${config.id}`) as HTMLInputElement;
+                                const key = keyEl?.value.trim();
+                                const label = labelEl?.value.trim();
+                                if (!key || !label) return;
+                                const newField: FieldConfig = { key, label, type: "text", required: false, placeholder: `填写${label}` };
+                                setEditingConfig({ ...editingConfig, fields: [...editingConfig.fields, newField] });
+                                keyEl.value = "";
+                                labelEl.value = "";
+                              }}
+                            >添加字段</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="config-edit-section">
+                        <h4>角色权限</h4>
+                        {(["维修工程师", "放行人员", "培训教员"] as UserRole[]).map(role => {
+                          const perm = editingConfig.rolePermissions[role];
+                          if (!perm) return null;
+                          return (
+                            <div key={role} className="role-perm-item">
+                              <strong>{role}</strong>
+                              <div className="perm-checkboxes">
+                                <label className="config-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={perm.canView}
+                                    onChange={e => setEditingConfig({
+                                      ...editingConfig,
+                                      rolePermissions: {
+                                        ...editingConfig.rolePermissions,
+                                        [role]: { ...perm, canView: e.target.checked }
+                                      }
+                                    })}
+                                  />
+                                  可查看
+                                </label>
+                                <label className="config-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!perm.canReview}
+                                    onChange={e => setEditingConfig({
+                                      ...editingConfig,
+                                      rolePermissions: {
+                                        ...editingConfig.rolePermissions,
+                                        [role]: { ...perm, canReview: e.target.checked }
+                                      }
+                                    })}
+                                  />
+                                  可复核
+                                </label>
+                                <label className="config-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!perm.canCreateDefect}
+                                    onChange={e => setEditingConfig({
+                                      ...editingConfig,
+                                      rolePermissions: {
+                                        ...editingConfig.rolePermissions,
+                                        [role]: { ...perm, canCreateDefect: e.target.checked }
+                                      }
+                                    })}
+                                  />
+                                  可创建缺陷
+                                </label>
+                              </div>
+                              <div className="perm-editable-fields">
+                                <span>可编辑字段：</span>
+                                <input
+                                  type="text"
+                                  value={perm.canEdit.join(", ")}
+                                  onChange={e => {
+                                    const newEdit = e.target.value.split(",").map(s => s.trim()).filter(Boolean);
+                                    setEditingConfig({
+                                      ...editingConfig,
+                                      rolePermissions: {
+                                        ...editingConfig.rolePermissions,
+                                        [role]: { ...perm, canEdit: newEdit }
+                                      }
+                                    });
+                                  }}
+                                  placeholder="字段key，逗号分隔"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="config-edit-section">
+                        <h4>状态流转配置</h4>
+                        <div className="status-transitions-list">
+                          {editingConfig.statusTransitions.map((transition, tIdx) => (
+                            <div key={tIdx} className="status-transition-item">
+                              <div className="transition-flow">
+                                <select
+                                  value={transition.from}
+                                  onChange={e => {
+                                    const newTransitions = [...editingConfig.statusTransitions];
+                                    newTransitions[tIdx] = { ...transition, from: e.target.value };
+                                    setEditingConfig({ ...editingConfig, statusTransitions: newTransitions });
+                                  }}
+                                >
+                                  {editingConfig.statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                                <span className="transition-arrow">→</span>
+                                <select
+                                  value={transition.to}
+                                  onChange={e => {
+                                    const newTransitions = [...editingConfig.statusTransitions];
+                                    newTransitions[tIdx] = { ...transition, to: e.target.value };
+                                    setEditingConfig({ ...editingConfig, statusTransitions: newTransitions });
+                                  }}
+                                >
+                                  {editingConfig.statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                              </div>
+                              <input
+                                type="text"
+                                value={transition.label}
+                                onChange={e => {
+                                  const newTransitions = [...editingConfig.statusTransitions];
+                                  newTransitions[tIdx] = { ...transition, label: e.target.value };
+                                  setEditingConfig({ ...editingConfig, statusTransitions: newTransitions });
+                                }}
+                                placeholder="操作按钮文字"
+                                className="transition-label-input"
+                              />
+                              <select
+                                multiple
+                                value={transition.allowedRoles}
+                                onChange={e => {
+                                  const newTransitions = [...editingConfig.statusTransitions];
+                                  const selectedRoles = Array.from(e.target.selectedOptions).map(o => o.value as UserRole);
+                                  newTransitions[tIdx] = { ...transition, allowedRoles: selectedRoles };
+                                  setEditingConfig({ ...editingConfig, statusTransitions: newTransitions });
+                                }}
+                                className="transition-roles-select"
+                              >
+                                {(["维修工程师", "放行人员", "培训教员"] as UserRole[]).map(role => (
+                                  <option key={role} value={role}>{role}</option>
+                                ))}
+                              </select>
+                              <input
+                                type="text"
+                                value={transition.requiredFields?.join(", ") || ""}
+                                onChange={e => {
+                                  const newTransitions = [...editingConfig.statusTransitions];
+                                  const fields = e.target.value.split(",").map(s => s.trim()).filter(Boolean);
+                                  newTransitions[tIdx] = { ...transition, requiredFields: fields.length > 0 ? fields : undefined };
+                                  setEditingConfig({ ...editingConfig, statusTransitions: newTransitions });
+                                }}
+                                placeholder="必填字段（逗号分隔，可选）"
+                                className="transition-fields-input"
+                              />
+                              <select
+                                value={transition.colorClass || ""}
+                                onChange={e => {
+                                  const newTransitions = [...editingConfig.statusTransitions];
+                                  newTransitions[tIdx] = { ...transition, colorClass: e.target.value || undefined };
+                                  setEditingConfig({ ...editingConfig, statusTransitions: newTransitions });
+                                }}
+                                className="transition-color-select"
+                              >
+                                <option value="">默认样式</option>
+                                <option value="pass-btn">通过（绿色）</option>
+                                <option value="reject-btn">驳回（红色）</option>
+                              </select>
+                              <button
+                                className="tag-remove-btn"
+                                onClick={() => {
+                                  const newTransitions = editingConfig.statusTransitions.filter((_, i) => i !== tIdx);
+                                  setEditingConfig({ ...editingConfig, statusTransitions: newTransitions });
+                                }}
+                              >×</button>
+                            </div>
+                          ))}
+                          <button
+                            className="secondary-action"
+                            onClick={() => {
+                              if (editingConfig.statuses.length < 2) {
+                                alert("至少需要2个状态才能创建流转");
+                                return;
+                              }
+                              const newTransition = {
+                                from: editingConfig.statuses[0],
+                                to: editingConfig.statuses[1],
+                                label: `流转到${editingConfig.statuses[1]}`,
+                                allowedRoles: ["放行人员"] as UserRole[],
+                                colorClass: editingConfig.statuses[1].includes("正常") || editingConfig.statuses[1].includes("通过") ? "pass-btn" : "reject-btn"
+                              };
+                              setEditingConfig({ ...editingConfig, statusTransitions: [...editingConfig.statusTransitions, newTransition] });
+                            }}
+                          >+ 添加状态流转</button>
+                        </div>
+                      </div>
+                      <div className="config-edit-actions">
+                        <button className="primary-action" onClick={handleSaveEditingConfig}>保存</button>
+                        <button className="secondary-action" onClick={() => setEditingConfig(null)}>取消</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="config-card-header">
+                      <div>
+                        <strong>{config.displayName}</strong>
+                        {(config as any)._builtIn && <span className="config-badge config-badge-builtin">内置</span>}
+                        {(config as any)._fallback && <span className="config-badge config-badge-fallback">兼容模式</span>}
+                        <span className="config-meta">{config.aircraftType} · {config.ataChapter} · {config.checkArea}</span>
+                        <span className="config-statuses">状态：{config.statuses.join(" → ")}</span>
+                        <span className="config-field-count">字段：{config.fields.length}个</span>
+                        <span className="config-field-count">流转：{config.statusTransitions.length}条</span>
+                      </div>
+                      <div className="config-card-actions">
+                        <button
+                          className="secondary-action"
+                          onClick={() => setEditingConfig({ ...config })}
+                        >编辑</button>
+                        <button
+                          className="danger-action"
+                          onClick={() => handleDeleteWorkflowConfig(config.id)}
+                        >删除</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
       {activeRole !== "培训教员" && (
         <section className="records panel">
           <div className="section-heading">
@@ -3382,11 +3916,12 @@ function App() {
                 const commentData = trainingComments[record.id];
                 const releaseReview = releaseReviews[record.id];
                 const recordConfig = findRecordWorkflowConfig(record);
+                const isFallbackConfig = (recordConfig as any)?._fallback;
                 const availableTransitions = recordConfig
                   ? getAvailableStatusTransitions(recordConfig, record.status, activeRole)
                   : [];
                 return (
-                  <article key={record.id} className="review-card">
+                  <article key={record.id} className={`review-card ${isFallbackConfig ? "fallback-config-card" : ""}`}>
                     <div className="review-card-header">
                       <div className="review-card-index">{String(index + 1).padStart(2, "0")}</div>
                       <div className="review-card-title">
@@ -3395,6 +3930,11 @@ function App() {
                           <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
                             {record.status}
                           </span>
+                          {isFallbackConfig && (
+                            <span className="fallback-config-badge" title="原始配置已删除或修改，当前使用兼容模式展示">
+                              ⚠️ 兼容模式
+                            </span>
+                          )}
                           <button
                             className="history-btn"
                             onClick={() => setActiveHistoryRecordId(
