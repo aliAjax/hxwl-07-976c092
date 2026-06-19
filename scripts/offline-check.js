@@ -212,6 +212,35 @@ function validateTestPage() {
   record("offline-test.html 存在", exists);
 }
 
+function validateNodeVersion() {
+  section("验证 Node 版本一致性");
+
+  const nvmrcPath = path.join(ROOT, ".nvmrc");
+  const hasNvmrc = fs.existsSync(nvmrcPath);
+  record(".nvmrc 版本文件存在", hasNvmrc);
+
+  if (!hasNvmrc) return;
+
+  const expectedVersion = fs.readFileSync(nvmrcPath, "utf-8").trim();
+  const actualVersion = process.version.replace(/^v/, "");
+
+  const majorMatch = actualVersion.split(".")[0] === expectedVersion.split(".")[0];
+  record(
+    `Node 主版本一致 (期望 ${expectedVersion}.x, 实际 ${actualVersion})`,
+    majorMatch,
+    `当前 v${actualVersion}`
+  );
+
+  const workflowPath = path.join(ROOT, ".github", "workflows", "offline-tests.yml");
+  if (fs.existsSync(workflowPath)) {
+    const workflow = fs.readFileSync(workflowPath, "utf-8");
+    const hasVersionInCI = workflow.includes(`node-version-file: ".nvmrc"`) ||
+                          workflow.includes(`node-version: "${expectedVersion}`) ||
+                          workflow.includes(`node-version: [${expectedVersion}`);
+    record("CI 配置包含对应 Node 版本", hasVersionInCI);
+  }
+}
+
 function printSummary() {
   section("测试汇总");
 
@@ -243,6 +272,7 @@ function main() {
   console.log("验证 Service Worker、离线缓存、同步队列等核心功能");
 
   try {
+    validateNodeVersion();
     validateServiceWorker();
     validateOfflineModule();
     validateSyncModule();
