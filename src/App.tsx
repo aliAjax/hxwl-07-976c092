@@ -842,6 +842,16 @@ function App() {
   const [selectedConflict, setSelectedConflict] = useState<ConflictInfo | null>(null);
   const [dataRefreshIndicator, setDataRefreshIndicator] = useState(false);
 
+  const reviewRecordsRef = useRef<ReviewRecord[]>(reviewRecords);
+  const defectsRef = useRef<Record<string, DefectItem>>(defects);
+  const trainingCommentsRef = useRef<Record<string, TrainingComment>>(trainingComments);
+  const conflictsRef = useRef<ConflictInfo[]>(conflicts);
+
+  useEffect(() => { reviewRecordsRef.current = reviewRecords; }, [reviewRecords]);
+  useEffect(() => { defectsRef.current = defects; }, [defects]);
+  useEffect(() => { trainingCommentsRef.current = trainingComments; }, [trainingComments]);
+  useEffect(() => { conflictsRef.current = conflicts; }, [conflicts]);
+
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -966,7 +976,7 @@ function App() {
     const remoteEntity = entity as VersionedEntity;
 
     if (entityType === "record") {
-      const localRecord = reviewRecords.find(r => r.id === entity.id);
+      const localRecord = reviewRecordsRef.current.find(r => r.id === entity.id);
       if (localRecord) {
         const localVersioned = localRecord as unknown as VersionedEntity;
         const conflict = detectConflict(localVersioned, remoteEntity);
@@ -985,7 +995,7 @@ function App() {
         return [...prev, entity];
       });
     } else if (entityType === "defect") {
-      const localDefect = defects[entity.id];
+      const localDefect = defectsRef.current[entity.id];
       if (localDefect) {
         const localVersioned = localDefect as unknown as VersionedEntity;
         const conflict = detectConflict(localVersioned, remoteEntity);
@@ -996,7 +1006,7 @@ function App() {
       }
       setDefects(prev => ({ ...prev, [entity.id]: entity }));
     } else if (entityType === "trainingComment") {
-      const localComment = trainingComments[entity.recordId];
+      const localComment = trainingCommentsRef.current[entity.recordId];
       if (localComment) {
         const localVersioned = localComment as unknown as VersionedEntity;
         const conflict = detectConflict(localVersioned, remoteEntity);
@@ -1037,27 +1047,30 @@ function App() {
     if (resolution === "acceptRemote") {
       if (conflict.entityType === "record") {
         const remoteRecord = conflict.remoteVersion as VersionedRecord;
-        await updateRecord(remoteRecord);
-        setReviewRecords(prev => prev.map(r => r.id === conflict.entityId ? remoteRecord : r));
+        const versionedRecord = await updateRecord(remoteRecord);
+        setReviewRecords(prev => prev.map(r => r.id === conflict.entityId ? versionedRecord : r));
       } else if (conflict.entityType === "defect") {
         const remoteDefect = conflict.remoteVersion as unknown as DefectItem;
-        await updateDefect(remoteDefect);
-        setDefects(prev => ({ ...prev, [conflict.entityId]: remoteDefect }));
+        const versionedDefect = await updateDefect(remoteDefect);
+        setDefects(prev => ({ ...prev, [conflict.entityId]: versionedDefect }));
       } else if (conflict.entityType === "trainingComment") {
         const remoteComment = conflict.remoteVersion as unknown as TrainingComment;
-        await saveTrainingComment(remoteComment);
-        setTrainingComments(prev => ({ ...prev, [remoteComment.recordId]: remoteComment }));
+        const versionedComment = await saveTrainingComment(remoteComment);
+        setTrainingComments(prev => ({ ...prev, [versionedComment.recordId]: versionedComment }));
       }
     } else {
       if (conflict.entityType === "record") {
         const localRecord = conflict.localVersion as VersionedRecord;
-        await updateRecord(localRecord);
+        const versionedRecord = await updateRecord(localRecord);
+        setReviewRecords(prev => prev.map(r => r.id === conflict.entityId ? versionedRecord : r));
       } else if (conflict.entityType === "defect") {
         const localDefect = conflict.localVersion as unknown as DefectItem;
-        await updateDefect(localDefect);
+        const versionedDefect = await updateDefect(localDefect);
+        setDefects(prev => ({ ...prev, [conflict.entityId]: versionedDefect }));
       } else if (conflict.entityType === "trainingComment") {
         const localComment = conflict.localVersion as unknown as TrainingComment;
-        await saveTrainingComment(localComment);
+        const versionedComment = await saveTrainingComment(localComment);
+        setTrainingComments(prev => ({ ...prev, [versionedComment.recordId]: versionedComment }));
       }
     }
 
@@ -1065,7 +1078,7 @@ function App() {
       !(c.entityType === conflict.entityType && c.entityId === conflict.entityId)
     ));
     setSelectedConflict(null);
-    if (conflicts.length <= 1) {
+    if (conflictsRef.current.length <= 1) {
       setShowConflictModal(false);
     }
   };
@@ -1075,7 +1088,7 @@ function App() {
       !(c.entityType === conflict.entityType && c.entityId === conflict.entityId)
     ));
     setSelectedConflict(null);
-    if (conflicts.length <= 1) {
+    if (conflictsRef.current.length <= 1) {
       setShowConflictModal(false);
     }
   };
@@ -1100,13 +1113,13 @@ function App() {
       fieldChanges
     };
     try {
-      await addStatusHistory(historyItem);
+      const versionedHistory = await addStatusHistory(historyItem);
       setStatusHistory(prev => {
         const next = { ...prev };
         if (!next[recordId]) {
           next[recordId] = [];
         }
-        next[recordId] = [historyItem, ...next[recordId]];
+        next[recordId] = [versionedHistory, ...next[recordId]];
         return next;
       });
     } catch (error) {
@@ -1127,8 +1140,8 @@ function App() {
       updatedAt: now
     };
     try {
-      await saveTrainingComment(newComment);
-      setTrainingComments(prev => ({ ...prev, [recordId]: newComment }));
+      const versionedComment = await saveTrainingComment(newComment);
+      setTrainingComments(prev => ({ ...prev, [recordId]: versionedComment }));
       if (networkStatus === "offline") {
         showOfflineSaveToast("培训讲评已暂存本地");
       }
@@ -1150,8 +1163,8 @@ function App() {
       updatedAt: now
     };
     try {
-      await saveTrainingComment(newComment);
-      setTrainingComments(prev => ({ ...prev, [recordId]: newComment }));
+      const versionedComment = await saveTrainingComment(newComment);
+      setTrainingComments(prev => ({ ...prev, [recordId]: versionedComment }));
       if (networkStatus === "offline") {
         showOfflineSaveToast("培训讲评已暂存本地");
       }
@@ -1501,8 +1514,8 @@ function App() {
       }
       if (record.status !== newStatus || (opinion && opinion !== record.handling)) {
         const updatedRecord = { ...record, status: newStatus, handling: opinion || record.handling };
-        await updateRecord(updatedRecord);
-        setReviewRecords(prev => prev.map(r => r.id === recordId ? updatedRecord : r));
+        const versionedRecord = await updateRecord(updatedRecord);
+        setReviewRecords(prev => prev.map(r => r.id === recordId ? versionedRecord : r));
         if (record.status !== newStatus) {
           await recordStatusChange(
             recordId,
@@ -1627,11 +1640,15 @@ function App() {
       for (const review of newReviews) {
         await saveReleaseReview(review);
       }
+      const versionedRecords: ReviewRecord[] = [];
       for (const record of updatedRecords) {
-        await updateRecord(record);
+        const versioned = await updateRecord(record);
+        versionedRecords.push(versioned);
       }
+      const versionedHistory: StatusHistoryItem[] = [];
       for (const history of historyItems) {
-        await addStatusHistory(history);
+        const versioned = await addStatusHistory(history);
+        versionedHistory.push(versioned);
       }
       setReleaseReviews(prev => {
         const next = { ...prev };
@@ -1640,7 +1657,7 @@ function App() {
       });
       setReviewRecords(prev => {
         const next = [...prev];
-        updatedRecords.forEach(ur => {
+        versionedRecords.forEach(ur => {
           const idx = next.findIndex(r => r.id === ur.id);
           if (idx !== -1) next[idx] = ur;
         });
@@ -1648,7 +1665,7 @@ function App() {
       });
       setStatusHistory(prev => {
         const next = { ...prev };
-        historyItems.forEach(h => {
+        versionedHistory.forEach(h => {
           if (!next[h.recordId]) next[h.recordId] = [];
           next[h.recordId] = [h, ...next[h.recordId]];
         });
@@ -1706,8 +1723,8 @@ function App() {
     const toStatus = transition.to;
     try {
       const updatedRecord = { ...record, status: toStatus };
-      await updateRecord(updatedRecord);
-      setReviewRecords(prev => prev.map(r => r.id === recordId ? updatedRecord : r));
+      const versionedRecord = await updateRecord(updatedRecord);
+      setReviewRecords(prev => prev.map(r => r.id === recordId ? versionedRecord : r));
       await recordStatusChange(
         recordId,
         fromStatus,
@@ -1715,16 +1732,16 @@ function App() {
         `${activeRole}执行"${transition.label}"操作`
       );
       if (toStatus === "缺陷") {
-        const existingDefect = Object.values(defects).find(d => d.sourceRecordId === recordId);
+        const existingDefect = Object.values(defectsRef.current).find(d => d.sourceRecordId === recordId);
         if (!existingDefect) {
-          setCreateDefectSourceRecord(updatedRecord);
+          setCreateDefectSourceRecord(versionedRecord);
           setCreateDefectPriority("medium");
           setCreateDefectExpectedTime("");
           setIsCreateDefectModalOpen(true);
         }
       }
       if (fromStatus === "缺陷" && toStatus === "正常") {
-        const relatedDefect = Object.values(defects).find(
+        const relatedDefect = Object.values(defectsRef.current).find(
           d => d.sourceRecordId === recordId && (d.status === "pending" || d.status === "processing")
         );
         if (relatedDefect) {
@@ -1736,8 +1753,8 @@ function App() {
             completedAt: now,
             updatedAt: now
           };
-          await updateDefect(updatedDefect);
-          setDefects(prev => ({ ...prev, [relatedDefect.id]: updatedDefect }));
+          const versionedDefect = await updateDefect(updatedDefect);
+          setDefects(prev => ({ ...prev, [relatedDefect.id]: versionedDefect }));
         }
       }
       if (releaseReviews[recordId] && toStatus === "待复核") {
@@ -1753,7 +1770,7 @@ function App() {
   };
 
   const handleGenerateDefectFromRecord = (record: ReviewRecord) => {
-    const existingDefect = Object.values(defects).find(d => d.sourceRecordId === record.id);
+    const existingDefect = Object.values(defectsRef.current).find(d => d.sourceRecordId === record.id);
     if (existingDefect) {
       alert("该缺陷项已存在于待处理清单中！");
       return;
@@ -1798,8 +1815,8 @@ function App() {
       updatedAt: Date.now()
     };
     try {
-      await updateDefect(updatedDefect);
-      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
       if (networkStatus === "offline") {
         showOfflineSaveToast("缺陷更新已暂存本地");
       }
@@ -1813,13 +1830,13 @@ function App() {
     setDefectFormValues(prev => ({
       ...prev,
       [defectId]: {
-        handlingOpinion: prev[defectId]?.handlingOpinion || "",
-        assignedSigner: prev[defectId]?.assignedSigner || "",
-        rejectedReason: prev[defectId]?.rejectedReason || "",
-        completedNote: prev[defectId]?.completedNote || "",
-        priority: prev[defectId]?.priority || defect?.priority || "medium",
-        expectedCompletionTime: prev[defectId]?.expectedCompletionTime || formatDateTimeLocalValue(defect?.expectedCompletionTime),
         ...prev[defectId],
+        handlingOpinion: prev[defectId]?.handlingOpinion ?? "",
+        assignedSigner: prev[defectId]?.assignedSigner ?? "",
+        rejectedReason: prev[defectId]?.rejectedReason ?? "",
+        completedNote: prev[defectId]?.completedNote ?? "",
+        priority: prev[defectId]?.priority ?? defect?.priority ?? "medium",
+        expectedCompletionTime: prev[defectId]?.expectedCompletionTime ?? formatDateTimeLocalValue(defect?.expectedCompletionTime),
         [field]: value
       }
     }));
@@ -1857,8 +1874,8 @@ function App() {
     };
 
     try {
-      await updateDefect(updatedDefect);
-      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
       if (networkStatus === "offline") {
         showOfflineSaveToast("缺陷更新已暂存本地");
       }
@@ -1887,8 +1904,8 @@ function App() {
     };
 
     try {
-      await updateDefect(updatedDefect);
-      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
       setDefectFormValues(prev => {
         const next = { ...prev };
         delete next[defectId];
@@ -1927,8 +1944,8 @@ function App() {
     };
 
     try {
-      await updateDefect(updatedDefect);
-      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
       setDefectFormValues(prev => {
         const next = { ...prev };
         delete next[defectId];
@@ -1962,8 +1979,8 @@ function App() {
     };
 
     try {
-      await updateDefect(updatedDefect);
-      setDefects(prev => ({ ...prev, [defectId]: updatedDefect }));
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
       if (networkStatus === "offline") {
         showOfflineSaveToast("缺陷更新已暂存本地");
       }
@@ -2390,8 +2407,8 @@ function App() {
     }
 
     try {
-      await addRecord(newRecord);
-      setReviewRecords(prev => [...prev, newRecord]);
+      const versionedRecord = await addRecord(newRecord);
+      setReviewRecords(prev => [...prev, versionedRecord]);
       await recordStatusChange(newRecord.id, "新建", formValues.status, `${activeRole}提交检查记录`);
       if (networkStatus === "offline") {
         showOfflineSaveToast("新增记录已暂存本地");
