@@ -2162,7 +2162,8 @@ function App() {
   const handleAddRecord = async () => {
     const config = currentWorkflowConfig;
     const formData = formValues as unknown as Record<string, string>;
-    const baseValidation = validateRequiredFields(getVisibleFields(config), formData);
+    const visibleFields = getVisibleFields(config);
+    const baseValidation = validateRequiredFields(visibleFields, formData);
     if (!baseValidation.valid) {
       alert(`请填写必填字段：${baseValidation.missingFields.join("、")}`);
       return;
@@ -2206,7 +2207,8 @@ function App() {
       "aircraftType", "ataChapter", "checkArea", "checkItem",
       "status", "defectDesc", "handling", "signer"
     ]);
-    Object.keys(formAny).forEach(key => {
+    const visibleFieldKeys = new Set(visibleFields.map(field => field.key));
+    Array.from(visibleFieldKeys).forEach(key => {
       if (!baseKeys.has(key) && formAny[key] !== undefined && formAny[key] !== null && String(formAny[key]).trim() !== "") {
         (newRecord as any)[key] = formAny[key];
       }
