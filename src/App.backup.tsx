@@ -3,32 +3,120 @@ import "./styles.css";
 import {
   CheckTemplate,
   ReviewRecord,
+  ReviewState,
+  ReleaseReviewResult,
+  ReleaseReviewState,
   DefectItem,
+  DefectState,
   DefectPriority,
   StatusHistoryItem,
+  StatusHistoryState,
+  TrainingComment,
+  TrainingCommentState,
   TrainingCommentStatus,
   UserRole as DBUserRole,
-  initializeDatabase
+  initializeDatabase,
+  addTemplate,
+  updateTemplate,
+  deleteTemplate as dbDeleteTemplate,
+  addRecord,
+  updateRecord,
+  saveReviewNote,
+  getAllTemplates,
+  getAllRecords,
+  getAllReviewNotes,
+  getAllReleaseReviews,
+  saveReleaseReview,
+  getAllDefects,
+  updateDefect,
+  createDefectFromRecord,
+  deleteDefect,
+  addStatusHistory,
+  saveTrainingComment,
+  getAllStatusHistory,
+  getAllTrainingComments
 } from "./db";
 import {
   WorkflowConfig,
   FieldConfig,
+  findWorkflowConfig,
   getStatusBadgeClass,
   getDefectStatusBadgeClass,
   getDefectStatusText,
+  getAllAircraftTypes,
+  getAtaChaptersByAircraft,
+  getCheckAreasByAircraftAndAta,
+  canRoleEditField,
   getAvailableStatusTransitions,
+  validateRequiredFields,
+  calculateMetricValue,
+  getMatrixCellStatus,
   getRecordDisplayFields,
   canCreateDefect,
+  getInitialStatus,
+  StatusCategory,
+  getStatusCategory,
+  getRoleVisibleFields,
+  canRolePerformAction,
+  getRoleEditableFields,
+  getRoleSpecificMetrics,
   getRoleDescription
 } from "./workflow";
-import { removeFromQueue } from "./offline";
-import { useStatusHistory } from "./hooks/useStatusHistory";
-import { useDefects } from "./hooks/useDefects";
-import { useReleaseReview } from "./hooks/useReleaseReview";
-import { useOfflineSync } from "./hooks/useOfflineSync";
-import { useRecords } from "./hooks/useRecords";
-import { useTrainingComments } from "./hooks/useTrainingComments";
-import { useWorkflowConfig } from "./hooks/useWorkflowConfig";
+import {
+  workflowConfigs,
+  getGlobalMetrics,
+  getGlobalFilters
+} from "./workflowConfigs";
+import {
+  getAllWorkflowConfigs,
+  saveWorkflowConfig,
+  deleteWorkflowConfig,
+  seedWorkflowConfigs,
+  createDefaultConfig,
+  resetWorkflowConfigsToDefault
+} from "./workflowConfigDB";
+import {
+  NetworkStatus,
+  SyncStatus,
+  SyncOperation,
+  SWStatus,
+  initNetworkMonitoring,
+  subscribeNetworkStatus,
+  subscribeSyncQueue,
+  subscribeSyncStatus,
+  subscribeSWStatus,
+  attemptAutoSync,
+  getPendingSyncCount,
+  getLastSyncTime,
+  isStaticCacheAvailable,
+  getOperationLabel,
+  getOperationSummary,
+  clearSyncedOperations,
+  removeFromQueue,
+  retryOperation,
+  getSWStatusText,
+  getCacheInfo,
+  clearCache,
+  precacheAssets,
+  updateServiceWorker,
+  activateWaitingWorker
+} from "./offline";
+import {
+  initSync,
+  subscribeEntityUpdates,
+  subscribeConflicts,
+  subscribeRefresh,
+  detectConflict,
+  broadcastConflict,
+  getEntityTypeLabel,
+  ConflictInfo,
+  SyncMessage,
+  VersionedEntity,
+  VersionedRecord,
+  VersionedDefect,
+  VersionedTrainingComment,
+  markOperationProcessed
+} from "./sync";
 
 type UserRole = "维修工程师" | "放行人员" | "培训教员";
 
@@ -52,6 +140,28 @@ const project = {
 };
 
 type TemplateFormValues = Omit<CheckTemplate, "id">;
+
+interface FormValues {
+  aircraftType: string;
+  ataChapter: string;
+  checkArea: string;
+  checkItem: string;
+  defectDesc: string;
+  handling: string;
+  signer: string;
+  status: string;
+}
+
+const emptyForm: FormValues = {
+  aircraftType: "",
+  ataChapter: "",
+  checkArea: "",
+  checkItem: "",
+  defectDesc: "",
+  handling: "",
+  signer: "",
+  status: "待复核"
+};
 
 const statusColors = ["status-ok", "status-watch", "status-danger"];
 
@@ -79,7 +189,7 @@ function ReleaseReviewCard({
 }: {
   record: ReviewRecord;
   index: number;
-  review?: any;
+  review?: ReleaseReviewResult;
   opinion: string;
   onOpinionChange: (id: string, value: string) => void;
   onReview: (id: string, status: "passed" | "rejected") => void;
@@ -652,363 +762,206 @@ function DynamicFormField({
 
 function App() {
   const [isLoading, setIsLoading] = useState(true);
+  const [templates, setTemplates] = useState<CheckTemplate[]>([]);
+  const [reviewRecords, setReviewRecords] = useState<ReviewRecord[]>([]);
+  const [reviewNotes, setReviewNotes] = useState<ReviewState>({});
+  const [releaseReviews, setReleaseReviews] = useState<ReleaseReviewState>({});
+  const [defects, setDefects] = useState<DefectState>({});
+  const [statusHistory, setStatusHistory] = useState<StatusHistoryState>({});
+  const [trainingComments, setTrainingComments] = useState<TrainingCommentState>({});
+  const [activeHistoryRecordId, setActiveHistoryRecordId] = useState<string | null>(null);
+  const [activeDefectTab, setActiveDefectTab] = useState<"pending" | "history">("pending");
+  const [isCreateDefectModalOpen, setIsCreateDefectModalOpen] = useState(false);
+  const [createDefectSourceRecord, setCreateDefectSourceRecord] = useState<ReviewRecord | null>(null);
+  const [createDefectPriority, setCreateDefectPriority] = useState<DefectPriority>("medium");
+  const [createDefectExpectedTime, setCreateDefectExpectedTime] = useState<string>("");
+  const [timeTick, setTimeTick] = useState(0);
+  const [defectFormValues, setDefectFormValues] = useState<Record<string, { handlingOpinion: string; assignedSigner: string; rejectedReason: string; completedNote: string; priority: DefectPriority; expectedCompletionTime: string }>>({});
+  const [formValues, setFormValues] = useState<FormValues>(emptyForm);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
+  const [isTemplateFromRecord, setIsTemplateFromRecord] = useState(false);
+  const [templateForm, setTemplateForm] = useState<TemplateFormValues>({
+    name: "",
+    aircraftType: "",
+    ataChapter: "",
+    checkArea: "",
+    checkItem: "",
+    defectDesc: "",
+    handling: "",
+    signer: ""
+  });
   const [activeRole, setActiveRole] = useState<UserRole>("维修工程师");
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [workflowConfigsState, setWorkflowConfigsState] = useState<WorkflowConfig[]>(workflowConfigs);
+  const [isConfigManagerOpen, setIsConfigManagerOpen] = useState(false);
+  const [editingConfig, setEditingConfig] = useState<WorkflowConfig | null>(null);
+  const [newConfigAircraftType, setNewConfigAircraftType] = useState("");
+  const [newConfigAtaChapter, setNewConfigAtaChapter] = useState("");
+  const [newConfigCheckArea, setNewConfigCheckArea] = useState("");
 
-  const entityUpdateHandlerRef = useRef<((message: any) => void) | null>(null);
-  const conflictHandlerRef = useRef<((conflict: any) => void) | null>(null);
-  const refreshHandlerRef = useRef<(() => void) | null>(null);
+  interface RecordFilterState {
+    aircraftType: string;
+    ataChapter: string;
+    status: string;
+    hasReleaseReview: "" | "yes" | "no";
+  }
 
-  const handleEntityUpdateWrapper = (message: any) => {
-    if (entityUpdateHandlerRef.current) {
-      entityUpdateHandlerRef.current(message);
-    }
+  const emptyRecordFilter: RecordFilterState = {
+    aircraftType: "",
+    ataChapter: "",
+    status: "",
+    hasReleaseReview: ""
   };
 
-  const handleConflictWrapper = (conflict: any) => {
-    if (conflictHandlerRef.current) {
-      conflictHandlerRef.current(conflict);
-    }
-  };
-
-  const handleRefreshWrapper = () => {
-    if (refreshHandlerRef.current) {
-      refreshHandlerRef.current();
-    }
-  };
-
-  const statusHistoryHook = useStatusHistory();
-  const workflowConfigHook = useWorkflowConfig({ activeRole });
-  const offlineSyncHook = useOfflineSync({
-    onEntityUpdate: handleEntityUpdateWrapper,
-    onConflict: handleConflictWrapper,
-    onRefresh: handleRefreshWrapper
-  });
-  const trainingCommentsHook = useTrainingComments({
-    activeRole,
-    networkStatus: offlineSyncHook.networkStatus,
-    onOfflineSave: offlineSyncHook.showOfflineSaveToast
-  });
-  const defectsHook = useDefects({
-    networkStatus: offlineSyncHook.networkStatus,
-    onOfflineSave: offlineSyncHook.showOfflineSaveToast
-  });
-
-  const handleRecordStatusChangeForRecords = async (
-    recordId: string,
-    fromStatus: string,
-    toStatus: string,
-    remark?: string
-  ) => {
-    await statusHistoryHook.recordStatusChange(
-      recordId,
-      fromStatus,
-      toStatus,
-      activeRole,
-      activeRole,
-      remark
-    );
-  };
-
-  const recordsHook = useRecords({
-    activeRole,
-    workflowConfigs: workflowConfigHook.workflowConfigs,
-    networkStatus: offlineSyncHook.networkStatus,
-    onOfflineSave: offlineSyncHook.showOfflineSaveToast,
-    onRecordStatusChange: handleRecordStatusChangeForRecords
-  });
-
-  const handleRecordStatusChangeForRelease = async (
-    recordId: string,
-    fromStatus: string,
-    toStatus: string,
-    remark?: string
-  ) => {
-    await statusHistoryHook.recordStatusChange(
-      recordId,
-      fromStatus,
-      toStatus,
-      activeRole,
-      activeRole,
-      remark
-    );
-  };
-
-  const releaseReviewHook = useReleaseReview({
-    activeRole,
-    networkStatus: offlineSyncHook.networkStatus,
-    onOfflineSave: offlineSyncHook.showOfflineSaveToast,
-    onRecordStatusChange: handleRecordStatusChangeForRelease,
-    onRecordUpdated: recordsHook.updateRecordItem
-  });
-
-  const {
-    statusHistory,
-    activeHistoryRecordId,
-    setActiveHistoryRecordId,
-    loadStatusHistory,
-    toggleHistory,
-    getRecordHistory,
-    setHistoryFromData
-  } = statusHistoryHook;
-
-  const {
-    defects,
-    defectFormValues,
-    activeDefectTab,
-    isCreateDefectModalOpen,
-    createDefectSourceRecord,
-    createDefectPriority,
-    createDefectExpectedTime,
-    timeTick,
-    defectStats,
-    groupedDefects,
-    setActiveDefectTab,
-    setIsCreateDefectModalOpen,
-    setCreateDefectSourceRecord,
-    setCreateDefectPriority,
-    setCreateDefectExpectedTime,
-    setTimeTick,
-    setDefectsFromData,
-    loadDefects,
-    handleDefectFormChange,
-    handleDefectPriorityOrTimeSave,
-    handleStartProcessing,
-    handleCompleteDefect,
-    handleRejectDefect,
-    handleReopenDefect,
-    handleDeleteDefect,
-    handleGenerateDefectFromRecord,
-    handleConfirmCreateDefect,
-    handleCancelCreateDefect,
-    getPriorityText,
-    getPriorityBadgeClass,
-    getDefaultDefectFormValues,
-    getTimeStatus,
-    isOverdue,
-    isSoonOverdue,
-    getDefectSourceRecord,
-    updateDefectItem,
-    getDefectStatusBadgeClass: getDefectStatusBadgeClassFromHook,
-    getDefectStatusText: getDefectStatusTextFromHook
-  } = defectsHook;
-
-  const {
-    releaseReviews,
-    reviewNotes,
-    releaseOpinions,
-    selectedRecordIds,
-    batchOpinion,
-    setSelectedRecordIds,
-    setBatchOpinion,
-    setReleaseReviewsFromData,
-    setReviewNotesFromData,
-    loadReleaseReviews,
-    handleReviewNoteChange,
-    handleReleaseOpinionChange,
-    handleReleaseReview,
-    handleToggleSelectRecord,
-    handleToggleSelectAllPending,
-    handleBatchReview,
-    getPendingRecords,
-    getDefectRecords,
-    getNormalRecords,
-    releaseStats,
-    groupedRecords,
-    clearReleaseReview
-  } = releaseReviewHook;
-
-  const {
-    networkStatus,
-    syncStatus,
-    syncQueue,
-    showSyncPanel,
-    showOnlineRestoredToast,
-    cacheReady,
-    swStatus,
-    showCachePanel,
-    offlineSaveToast,
-    conflicts,
-    showConflictModal,
-    selectedConflict,
-    dataRefreshIndicator,
-    pendingCount,
-    lastSync,
-    failedCount,
-    waitingCount,
-    setShowSyncPanel,
-    setShowCachePanel,
-    setShowConflictModal,
-    setSelectedConflict,
-    setConflicts,
-    initOfflineSync,
-    showOfflineSaveToast,
-    handleRetryOperation,
-    handleDiscardOperation,
-    handleManualSync,
-    handleClearCache,
-    handlePrecache,
-    handleUpdateSW,
-    handleActivateWaiting,
-    handleRefreshCacheInfo,
-    resolveConflict,
-    dismissConflict,
-    handleConflictDetected,
-    formatLastSync,
-    getOperationLabel,
-    getOperationSummary,
-    getSWStatusText,
-    getEntityTypeLabel,
-    clearSyncedOperations,
-    detectConflict,
-    markOperationProcessed
-  } = offlineSyncHook;
-
-  const {
-    templates,
-    reviewRecords,
-    formValues,
-    isModalOpen,
-    editingTemplate,
-    isTemplateFromRecord,
-    templateForm,
-    recordFilters,
-    activeFilter,
-    isExportPreviewOpen,
-    copyStatus,
-    isMatrixDetailOpen,
-    matrixDetailData,
-    currentWorkflowConfig,
-    availableAircraftTypes,
-    availableAtaChapters,
-    availableCheckAreas,
-    allowedStatusOptions,
-    allAircraftTypes,
-    allAtaChapters,
-    allStatuses,
-    availableAtaChapterOptions,
-    filteredRecords,
-    matrixData,
-    setActiveFilter,
-    setIsExportPreviewOpen,
-    setCopyStatus,
-    setFormValues,
-    setRecordFilters,
-    setRecordsFromData,
-    setTemplatesFromData,
-    loadRecords,
-    getFormFieldValue,
-    handleFormFieldChange,
-    getVisibleFields,
-    handleRecordFilterChange,
-    resetRecordFilters,
-    reviewStats,
-    getCellStatus,
-    handleMatrixCellClick,
-    closeMatrixDetail,
-    findRecordWorkflowConfig,
-    handleStatusTransition,
-    handleAddRecord,
-    handleTemplateFormChange,
-    openNewModal,
-    openEditModal,
-    openSaveAsTemplateModal,
-    closeModal,
-    isTemplateNameDuplicate,
-    saveTemplate,
-    deleteTemplate,
-    applyTemplate,
-    updateRecordItem,
-    addRecordItem,
-    removeRecordItem
-  } = recordsHook;
-
-  const {
-    trainingComments,
-    loadTrainingComments,
-    setTrainingCommentsFromData,
-    handleTrainingCommentChange,
-    handleTrainingCommentStatusChange,
-    trainingCommentStats,
-    updateTrainingComment
-  } = trainingCommentsHook;
-
-  const {
-    workflowConfigs: workflowConfigsState,
-    isConfigManagerOpen,
-    editingConfig,
-    newConfigAircraftType,
-    newConfigAtaChapter,
-    newConfigCheckArea,
-    globalMetrics,
-    globalFilters,
-    allAircraftTypes: allAircraftTypesFromConfig,
-    setIsConfigManagerOpen,
-    setEditingConfig,
-    setNewConfigAircraftType,
-    setNewConfigAtaChapter,
-    setNewConfigCheckArea,
-    setWorkflowConfigsState,
-    setConfigsFromData,
-    loadWorkflowConfigs,
-    findWorkflowConfig,
-    handleAddWorkflowConfig,
-    handleDeleteWorkflowConfig,
-    handleSaveEditingConfig,
-    handleResetWorkflowConfigs,
-    getAvailableStatusTransitionsForRecord,
-    getRoleVisibleFieldsForConfig,
-    canRoleEditFieldForConfig,
-    canRolePerformActionForConfig,
-    getRoleEditableFieldsForConfig,
-    getRoleSpecificMetricsForConfig,
-    getInitialStatusForConfig,
-    getStatusCategory,
-    validateRequiredFields,
-    calculateMetricValue,
-    getMatrixCellStatus: getMatrixCellStatusFromConfig,
-    getRecordDisplayFields: getRecordDisplayFieldsFromConfig,
-    canCreateDefect: canCreateDefectFromConfig,
-    getRoleDescription: getRoleDescriptionFromConfig
-  } = workflowConfigHook;
-
-  const baseMetrics = currentWorkflowConfig?.metrics ?? globalMetrics;
-  const activeMetrics = useMemo(() => getRoleSpecificMetricsForConfig(baseMetrics), [baseMetrics, getRoleSpecificMetricsForConfig]);
-  const activeFilters = currentWorkflowConfig?.filters ?? globalFilters;
+  const [recordFilters, setRecordFilters] = useState<RecordFilterState>(emptyRecordFilter);
+  const [isExportPreviewOpen, setIsExportPreviewOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "failed">("idle");
+  const [isMatrixDetailOpen, setIsMatrixDetailOpen] = useState(false);
+  const [matrixDetailData, setMatrixDetailData] = useState<{
+    aircraftType: string;
+    ataChapter: string;
+    records: ReviewRecord[];
+  } | null>(null);
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [batchOpinion, setBatchOpinion] = useState("");
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(navigator.onLine ? "online" : "offline");
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+  const [syncQueue, setSyncQueue] = useState<SyncOperation[]>([]);
+  const [showSyncPanel, setShowSyncPanel] = useState(false);
+  const [showOnlineRestoredToast, setShowOnlineRestoredToast] = useState(false);
+  const [cacheReady, setCacheReady] = useState(false);
+  const [swStatus, setSwStatus] = useState<SWStatus | null>(null);
+  const [showCachePanel, setShowCachePanel] = useState(false);
+  const [offlineSaveToast, setOfflineSaveToast] = useState<string | null>(null);
+  const prevNetworkRef = useRef<NetworkStatus>(navigator.onLine ? "online" : "offline");
+  const toastTimerRef = useRef<number | null>(null);
+  const offlineToastTimerRef = useRef<number | null>(null);
+  const [conflicts, setConflicts] = useState<ConflictInfo[]>([]);
+  const [showConflictModal, setShowConflictModal] = useState(false);
+  const [selectedConflict, setSelectedConflict] = useState<ConflictInfo | null>(null);
+  const [dataRefreshIndicator, setDataRefreshIndicator] = useState(false);
 
   const reviewRecordsRef = useRef<ReviewRecord[]>(reviewRecords);
   const defectsRef = useRef<Record<string, DefectItem>>(defects);
-  const trainingCommentsRef = useRef<Record<string, any>>(trainingComments);
-  const conflictsRef = useRef<any[]>(conflicts);
+  const trainingCommentsRef = useRef<Record<string, TrainingComment>>(trainingComments);
+  const conflictsRef = useRef<ConflictInfo[]>(conflicts);
 
   useEffect(() => { reviewRecordsRef.current = reviewRecords; }, [reviewRecords]);
   useEffect(() => { defectsRef.current = defects; }, [defects]);
   useEffect(() => { trainingCommentsRef.current = trainingComments; }, [trainingComments]);
   useEffect(() => { conflictsRef.current = conflicts; }, [conflicts]);
 
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const data = await initializeDatabase();
+        setTemplates(data.templates);
+        setReviewRecords(data.records);
+        setReviewNotes(data.reviewNotes);
+        setReleaseReviews(data.releaseReviews);
+        setDefects(data.defects);
+        setStatusHistory(data.statusHistory);
+        setTrainingComments(data.trainingComments);
+        setCacheReady(isStaticCacheAvailable());
+        await seedWorkflowConfigs();
+        const configs = await getAllWorkflowConfigs();
+        setWorkflowConfigsState(configs);
+      } catch (error) {
+        console.error("Failed to initialize database:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadData();
+
+    const cleanupNetwork = initNetworkMonitoring();
+    const cleanupSync = initSync();
+    
+    const unsubscribeNetwork = subscribeNetworkStatus((status) => {
+      const prev = prevNetworkRef.current;
+      prevNetworkRef.current = status;
+      setNetworkStatus(status);
+      if (prev === "offline" && status === "online") {
+        setShowOnlineRestoredToast(true);
+        if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = window.setTimeout(() => setShowOnlineRestoredToast(false), 4000);
+        attemptAutoSync();
+      }
+    });
+    const unsubscribeSyncQueue = subscribeSyncQueue((queue) => {
+      setSyncQueue(queue);
+    });
+    const unsubscribeSyncStatus = subscribeSyncStatus((status) => {
+      setSyncStatus(status);
+    });
+    const unsubscribeSWStatus = subscribeSWStatus((status) => {
+      setSwStatus(status);
+    });
+    
+    const unsubscribeEntityUpdates = subscribeEntityUpdates(handleEntityUpdate);
+    const unsubscribeConflicts = subscribeConflicts(handleIncomingConflict);
+    const unsubscribeRefresh = subscribeRefresh(() => {
+      setDataRefreshIndicator(true);
+      refreshData().then(() => setDataRefreshIndicator(false));
+    });
+    
+    getCacheInfo();
+
+    return () => {
+      cleanupNetwork();
+      cleanupSync();
+      unsubscribeNetwork();
+      unsubscribeSyncQueue();
+      unsubscribeSyncStatus();
+      unsubscribeSWStatus();
+      unsubscribeEntityUpdates();
+      unsubscribeConflicts();
+      unsubscribeRefresh();
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTimeTick(t => t + 1);
+    }, 30 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const refreshData = async () => {
     try {
-      await Promise.all([
-        loadRecords(),
-        loadReleaseReviews(),
-        loadDefects(),
-        loadStatusHistory(),
-        loadTrainingComments()
+      const [t, r, n, rr, d, sh, tc] = await Promise.all([
+        getAllTemplates(),
+        getAllRecords(),
+        getAllReviewNotes(),
+        getAllReleaseReviews(),
+        getAllDefects(),
+        getAllStatusHistory(),
+        getAllTrainingComments()
       ]);
+      setTemplates(t);
+      setReviewRecords(r);
+      setReviewNotes(n);
+      setReleaseReviews(rr);
+      setDefects(d);
+      setStatusHistory(sh);
+      setTrainingComments(tc);
     } catch (error) {
       console.error("Failed to refresh data:", error);
     }
   };
 
-  const handleEntityUpdate = async (message: any) => {
+  const handleEntityUpdate = async (message: SyncMessage) => {
     if (message.operationId) {
       markOperationProcessed(message.operationId);
     }
 
     if (message.type === "ENTITY_DELETED") {
       if (message.entityType === "record") {
-        removeRecordItem(message.entityId);
+        setReviewRecords(prev => prev.filter(r => r.id !== message.entityId));
       } else if (message.entityType === "defect" && message.entityId) {
-        setDefectsFromData((prev: any) => {
+        setDefects(prev => {
           const next = { ...prev };
           delete next[message.entityId!];
           return next;
@@ -1020,90 +973,421 @@ function App() {
     if (!message.entity || !message.entityType) return;
 
     const { entityType, entity } = message;
-    const remoteEntity = entity as any;
+    const remoteEntity = entity as VersionedEntity;
 
     if (entityType === "record") {
       const localRecord = reviewRecordsRef.current.find(r => r.id === entity.id);
       if (localRecord) {
-        const conflict = detectConflict(localRecord as any, remoteEntity);
+        const localVersioned = localRecord as unknown as VersionedEntity;
+        const conflict = detectConflict(localVersioned, remoteEntity);
         if (conflict) {
           handleConflictDetected(conflict);
           return;
         }
       }
-      updateRecordItem(entity);
+      setReviewRecords(prev => {
+        const idx = prev.findIndex(r => r.id === entity.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = entity;
+          return next;
+        }
+        return [...prev, entity];
+      });
     } else if (entityType === "defect") {
       const localDefect = defectsRef.current[entity.id];
       if (localDefect) {
-        const conflict = detectConflict(localDefect as any, remoteEntity);
+        const localVersioned = localDefect as unknown as VersionedEntity;
+        const conflict = detectConflict(localVersioned, remoteEntity);
         if (conflict) {
           handleConflictDetected(conflict);
           return;
         }
       }
-      updateDefectItem(entity);
+      setDefects(prev => ({ ...prev, [entity.id]: entity }));
     } else if (entityType === "trainingComment") {
       const localComment = trainingCommentsRef.current[entity.recordId];
       if (localComment) {
-        const conflict = detectConflict(localComment as any, remoteEntity);
+        const localVersioned = localComment as unknown as VersionedEntity;
+        const conflict = detectConflict(localVersioned, remoteEntity);
         if (conflict) {
           handleConflictDetected(conflict);
           return;
         }
       }
-      updateTrainingComment(entity);
+      setTrainingComments(prev => ({ ...prev, [entity.recordId]: entity }));
     } else if (entityType === "statusHistory") {
       await refreshData();
     }
   };
 
-  const handleIncomingConflict = (conflict: any) => {
-    // 冲突处理已在 offlineSyncHook 中处理
+  const handleIncomingConflict = (conflict: ConflictInfo) => {
+    setConflicts(prev => {
+      const exists = prev.some(c => 
+        c.entityType === conflict.entityType && 
+        c.entityId === conflict.entityId &&
+        !c.resolved
+      );
+      if (exists) return prev;
+      return [...prev, conflict];
+    });
+    setShowConflictModal(true);
+    setSelectedConflict(conflict);
   };
 
-  const handleRefreshRequest = () => {
-    refreshData();
+  const handleConflictDetected = (conflict: ConflictInfo) => {
+    broadcastConflict(conflict);
+    handleIncomingConflict(conflict);
   };
 
-  useEffect(() => {
-    entityUpdateHandlerRef.current = handleEntityUpdate;
-    conflictHandlerRef.current = handleIncomingConflict;
-    refreshHandlerRef.current = handleRefreshRequest;
-  }, [handleEntityUpdate, handleIncomingConflict, handleRefreshRequest]);
+  const resolveConflict = async (conflict: ConflictInfo, resolution: "keepLocal" | "acceptRemote") => {
+    conflict.resolved = true;
+    conflict.resolution = resolution;
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const data = await initializeDatabase();
-        setTemplatesFromData(data.templates);
-        setRecordsFromData(data.records);
-        setReviewNotesFromData(data.reviewNotes);
-        setReleaseReviewsFromData(data.releaseReviews);
-        setDefectsFromData(data.defects);
-        setHistoryFromData(data.statusHistory);
-        setTrainingCommentsFromData(data.trainingComments);
-        await loadWorkflowConfigs();
-      } catch (error) {
-        console.error("Failed to initialize database:", error);
-      } finally {
-        setIsLoading(false);
+    if (resolution === "acceptRemote") {
+      if (conflict.entityType === "record") {
+        const remoteRecord = conflict.remoteVersion as VersionedRecord;
+        const versionedRecord = await updateRecord(remoteRecord);
+        setReviewRecords(prev => prev.map(r => r.id === conflict.entityId ? versionedRecord : r));
+      } else if (conflict.entityType === "defect") {
+        const remoteDefect = conflict.remoteVersion as unknown as DefectItem;
+        const versionedDefect = await updateDefect(remoteDefect);
+        setDefects(prev => ({ ...prev, [conflict.entityId]: versionedDefect }));
+      } else if (conflict.entityType === "trainingComment") {
+        const remoteComment = conflict.remoteVersion as unknown as TrainingComment;
+        const versionedComment = await saveTrainingComment(remoteComment);
+        setTrainingComments(prev => ({ ...prev, [versionedComment.recordId]: versionedComment }));
       }
-    };
-    loadData();
+    } else {
+      if (conflict.entityType === "record") {
+        const localRecord = conflict.localVersion as VersionedRecord;
+        const versionedRecord = await updateRecord(localRecord);
+        setReviewRecords(prev => prev.map(r => r.id === conflict.entityId ? versionedRecord : r));
+      } else if (conflict.entityType === "defect") {
+        const localDefect = conflict.localVersion as unknown as DefectItem;
+        const versionedDefect = await updateDefect(localDefect);
+        setDefects(prev => ({ ...prev, [conflict.entityId]: versionedDefect }));
+      } else if (conflict.entityType === "trainingComment") {
+        const localComment = conflict.localVersion as unknown as TrainingComment;
+        const versionedComment = await saveTrainingComment(localComment);
+        setTrainingComments(prev => ({ ...prev, [versionedComment.recordId]: versionedComment }));
+      }
+    }
 
-    const cleanup = initOfflineSync();
+    setConflicts(prev => prev.filter(c => 
+      !(c.entityType === conflict.entityType && c.entityId === conflict.entityId)
+    ));
+    setSelectedConflict(null);
+    if (conflictsRef.current.length <= 1) {
+      setShowConflictModal(false);
+    }
+  };
 
-    return () => {
-      cleanup && cleanup();
+  const dismissConflict = (conflict: ConflictInfo) => {
+    setConflicts(prev => prev.filter(c => 
+      !(c.entityType === conflict.entityType && c.entityId === conflict.entityId)
+    ));
+    setSelectedConflict(null);
+    if (conflictsRef.current.length <= 1) {
+      setShowConflictModal(false);
+    }
+  };
+
+  const recordStatusChange = async (
+    recordId: string,
+    fromStatus: string,
+    toStatus: string,
+    remark?: string,
+    fieldChanges?: Record<string, { oldValue: string; newValue: string }>
+  ) => {
+    if (fromStatus === toStatus) return;
+    const historyItem: StatusHistoryItem = {
+      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      recordId,
+      fromStatus,
+      toStatus,
+      operatorRole: activeRole as DBUserRole,
+      operatorName: activeRole,
+      changedAt: Date.now(),
+      remark,
+      fieldChanges
     };
-  }, []);
+    try {
+      const versionedHistory = await addStatusHistory(historyItem);
+      setStatusHistory(prev => {
+        const next = { ...prev };
+        if (!next[recordId]) {
+          next[recordId] = [];
+        }
+        next[recordId] = [versionedHistory, ...next[recordId]];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to record status history:", error);
+    }
+  };
+
+  const handleTrainingCommentChange = async (recordId: string, comment: string) => {
+    const now = Date.now();
+    const existing = trainingComments[recordId];
+    const newComment: TrainingComment = {
+      id: existing?.id || `tc-${now}`,
+      recordId,
+      comment,
+      trainer: activeRole,
+      status: existing?.status || (comment.trim().length > 0 ? "已闭环" : "待讲评"),
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    try {
+      const versionedComment = await saveTrainingComment(newComment);
+      setTrainingComments(prev => ({ ...prev, [recordId]: versionedComment }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("培训讲评已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to save training comment:", error);
+    }
+  };
+
+  const handleTrainingCommentStatusChange = async (recordId: string, status: TrainingCommentStatus) => {
+    const now = Date.now();
+    const existing = trainingComments[recordId];
+    const newComment: TrainingComment = {
+      id: existing?.id || `tc-${now}`,
+      recordId,
+      comment: existing?.comment || "",
+      trainer: activeRole,
+      status,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    try {
+      const versionedComment = await saveTrainingComment(newComment);
+      setTrainingComments(prev => ({ ...prev, [recordId]: versionedComment }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("培训讲评已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to save training comment status:", error);
+    }
+  };
+
+  const handleClearCache = async () => {
+    const confirmed = window.confirm(
+      "确定要清除所有离线缓存吗？\n\n清除后需要重新联网才能缓存资源。"
+    );
+    if (!confirmed) return;
+    const success = await clearCache();
+    if (success) {
+      setCacheReady(false);
+      alert("离线缓存已清除，请刷新页面以重新加载。");
+    } else {
+      alert("清除缓存失败，请稍后重试。");
+    }
+  };
+
+  const handlePrecache = async () => {
+    const success = await precacheAssets();
+    if (success) {
+      alert("资源预缓存完成！");
+    } else {
+      alert("预缓存可能未完全完成，请检查网络连接。");
+    }
+    await getCacheInfo();
+  };
+
+  const handleUpdateSW = async () => {
+    const success = await updateServiceWorker();
+    if (success) {
+      alert("Service Worker 已检查更新，如有新版本将自动下载。");
+    } else {
+      alert("检查更新失败，请稍后重试。");
+    }
+  };
+
+  const handleActivateWaiting = () => {
+    activateWaitingWorker();
+    window.location.reload();
+  };
+
+  const handleRefreshCacheInfo = async () => {
+    await getCacheInfo();
+  };
+
+  const currentWorkflowConfig = useMemo(() => {
+    if (formValues.aircraftType && formValues.ataChapter && formValues.checkArea) {
+      return findWorkflowConfig(workflowConfigsState, formValues.aircraftType, formValues.ataChapter, formValues.checkArea);
+    }
+    return workflowConfigsState[0];
+  }, [formValues.aircraftType, formValues.ataChapter, formValues.checkArea, workflowConfigsState]);
+
+  const availableAircraftTypes = useMemo(() => getAllAircraftTypes(workflowConfigsState), [workflowConfigsState]);
+  const availableAtaChapters = useMemo(
+    () => formValues.aircraftType ? getAtaChaptersByAircraft(workflowConfigsState, formValues.aircraftType) : [],
+    [formValues.aircraftType, workflowConfigsState]
+  );
+  const availableCheckAreas = useMemo(
+    () => formValues.aircraftType && formValues.ataChapter
+      ? getCheckAreasByAircraftAndAta(workflowConfigsState, formValues.aircraftType, formValues.ataChapter)
+      : [],
+    [formValues.aircraftType, formValues.ataChapter, workflowConfigsState]
+  );
+
+  const globalMetrics = useMemo(() => getGlobalMetrics(), []);
+  const globalFilters = useMemo(() => getGlobalFilters(), []);
+  const baseMetrics = currentWorkflowConfig?.metrics ?? globalMetrics;
+  const activeMetrics = useMemo(() => getRoleSpecificMetrics(baseMetrics, activeRole), [baseMetrics, activeRole]);
+  const activeFilters = currentWorkflowConfig?.filters ?? globalFilters;
+
+  const allowedStatusOptions = useMemo(() => {
+    const initialStatus = getInitialStatus(currentWorkflowConfig);
+    if (!currentWorkflowConfig) return [initialStatus];
+    const transitionTargets = getAvailableStatusTransitions(
+      currentWorkflowConfig,
+      initialStatus,
+      activeRole
+    ).map(transition => transition.to);
+    return Array.from(new Set([initialStatus, ...transitionTargets]));
+  }, [currentWorkflowConfig, activeRole]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setTimeTick(t => t + 1);
-    }, 30 * 1000);
-    return () => window.clearInterval(timer);
-  }, [setTimeTick]);
+    const initialStatus = getInitialStatus(currentWorkflowConfig);
+    setFormValues(prev => (
+      allowedStatusOptions.includes(prev.status)
+        ? prev
+        : { ...prev, status: initialStatus }
+    ));
+  }, [currentWorkflowConfig, allowedStatusOptions]);
+
+  useEffect(() => {
+    if (activeFilter && !activeFilters.some(filter => filter.key === activeFilter)) {
+      setActiveFilter(null);
+    }
+  }, [activeFilter, activeFilters]);
+
+  const getFormFieldValue = (key: string): string => {
+    const formAny = formValues as any;
+    return formAny[key] || "";
+  };
+
+  const handleFormFieldChange = (key: string, value: string) => {
+    setFormValues(prev => {
+      const next = { ...prev } as any;
+      next[key] = value;
+      if (key === "aircraftType") {
+        next.ataChapter = "";
+        next.checkArea = "";
+      } else if (key === "ataChapter") {
+        next.checkArea = "";
+      }
+      return next;
+    });
+  };
+
+  const getVisibleFields = (config: WorkflowConfig | undefined): FieldConfig[] => {
+    return getRoleVisibleFields(config, activeRole);
+  };
+
+  const allAircraftTypes = useMemo(() => {
+    const types = new Set<string>();
+    reviewRecords.forEach(r => types.add(r.aircraftType));
+    return Array.from(types).sort();
+  }, [reviewRecords]);
+
+  const allAtaChapters = useMemo(() => {
+    const chapters = new Set<string>();
+    reviewRecords.forEach(r => chapters.add(r.ataChapter));
+    return Array.from(chapters).sort();
+  }, [reviewRecords]);
+
+  const allStatuses = useMemo(() => {
+    const statuses = new Set<string>();
+    reviewRecords.forEach(r => statuses.add(r.status));
+    return Array.from(statuses).sort();
+  }, [reviewRecords]);
+
+  const availableAtaChapterOptions = useMemo(() => {
+    if (!recordFilters.aircraftType) return allAtaChapters;
+    const chapters = new Set<string>();
+    reviewRecords
+      .filter(r => r.aircraftType === recordFilters.aircraftType)
+      .forEach(r => chapters.add(r.ataChapter));
+    return Array.from(chapters).sort();
+  }, [reviewRecords, recordFilters.aircraftType, allAtaChapters]);
+
+  useEffect(() => {
+    setRecordFilters(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (next.aircraftType && !allAircraftTypes.includes(next.aircraftType)) {
+        next.aircraftType = "";
+        changed = true;
+      }
+
+      if (next.ataChapter && !allAtaChapters.includes(next.ataChapter)) {
+        next.ataChapter = "";
+        changed = true;
+      }
+
+      if (next.status && !allStatuses.includes(next.status)) {
+        next.status = "";
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [allAircraftTypes, allAtaChapters, allStatuses]);
+
+  const filteredRecords = useMemo(() => {
+    let result = reviewRecords;
+
+    if (activeFilter) {
+      const selectedFilter = activeFilters.find(filter => filter.key === activeFilter);
+      if (selectedFilter) {
+        result = result.filter(record => {
+          const value = String((record as any)[selectedFilter.matchField] ?? "");
+          return value === selectedFilter.label;
+        });
+      }
+    }
+
+    if (recordFilters.aircraftType) {
+      result = result.filter(r => r.aircraftType === recordFilters.aircraftType);
+    }
+
+    if (recordFilters.ataChapter) {
+      result = result.filter(r => r.ataChapter === recordFilters.ataChapter);
+    }
+
+    if (recordFilters.status) {
+      result = result.filter(r => r.status === recordFilters.status);
+    }
+
+    if (recordFilters.hasReleaseReview === "yes") {
+      result = result.filter(r => !!releaseReviews[r.id]);
+    } else if (recordFilters.hasReleaseReview === "no") {
+      result = result.filter(r => !releaseReviews[r.id]);
+    }
+
+    return result;
+  }, [reviewRecords, activeFilter, activeFilters, recordFilters, releaseReviews]);
+
+  const handleRecordFilterChange = (key: keyof RecordFilterState, value: string) => {
+    setRecordFilters(prev => {
+      const next = { ...prev, [key]: value };
+      if (key === "aircraftType") {
+        next.ataChapter = "";
+      }
+      return next;
+    });
+  };
+
+  const resetRecordFilters = () => {
+    setRecordFilters(emptyRecordFilter);
+    setActiveFilter(null);
+  };
 
   const metricValues = useMemo(() => {
     return activeMetrics.map(metric => {
@@ -1144,59 +1428,1119 @@ function App() {
       }
       return {
         ...metric,
-        value: calculateMetricValue(metric, reviewRecords, defects as any, releaseReviews)
+        value: calculateMetricValue(metric, reviewRecords, defects, releaseReviews)
       };
     });
-  }, [activeMetrics, reviewRecords, releaseReviews, defects, trainingComments, calculateMetricValue]);
+  }, [activeMetrics, reviewRecords, releaseReviews, defects, trainingComments]);
 
-  const enhancedFilteredRecords = useMemo(() => {
-    let result = filteredRecords;
-
-    if (activeFilter) {
-      const selectedFilter = activeFilters.find(filter => filter.key === activeFilter);
-      if (selectedFilter) {
-        result = result.filter(record => {
-          const value = String((record as any)[selectedFilter.matchField] ?? "");
-          return value === selectedFilter.label;
-        });
-      }
-    }
-
-    if (recordFilters.hasReleaseReview === "yes") {
-      result = result.filter(r => !!releaseReviews[r.id]);
-    } else if (recordFilters.hasReleaseReview === "no") {
-      result = result.filter(r => !releaseReviews[r.id]);
-    }
-
-    return result;
-  }, [filteredRecords, activeFilter, activeFilters, recordFilters.hasReleaseReview, releaseReviews]);
-
-  const releaseStatsValue = useMemo(() => {
-    return releaseStats.getStats(enhancedFilteredRecords);
-  }, [releaseStats, enhancedFilteredRecords]);
-
-  const groupedRecordsValue = useMemo(() => {
-    return groupedRecords.getGrouped(enhancedFilteredRecords);
-  }, [groupedRecords, enhancedFilteredRecords]);
-
-  const reviewStatsValue = useMemo(() => {
-    const baseStats = reviewStats.getStats(enhancedFilteredRecords);
+  const reviewStats = useMemo(() => {
+    const total = filteredRecords.length;
+    let defect = 0;
+    let pending = 0;
+    let normal = 0;
     let commented = 0;
-    enhancedFilteredRecords.forEach(r => {
+    filteredRecords.forEach(r => {
+      if (r.status.includes("缺陷")) defect++;
+      else if (r.status.includes("待复核")) pending++;
+      else normal++;
       if (reviewNotes[r.id] && reviewNotes[r.id].trim().length > 0) commented++;
     });
-    return { ...baseStats, commented };
-  }, [reviewStats, enhancedFilteredRecords, reviewNotes]);
+    return { total, defect, pending, normal, commented };
+  }, [filteredRecords, reviewNotes]);
 
-  const trainingCommentStatsValue = useMemo(() => {
-    return trainingCommentStats.getStats(enhancedFilteredRecords);
-  }, [trainingCommentStats, enhancedFilteredRecords]);
+  const trainingCommentStats = useMemo(() => {
+    let pendingReview = 0;
+    let needRetraining = 0;
+    let closed = 0;
+    filteredRecords.forEach(r => {
+      const comment = trainingComments[r.id];
+      const status = comment?.status;
+      if (status === "待讲评" || !status) {
+        pendingReview++;
+      } else if (status === "需复训") {
+        needRetraining++;
+      } else if (status === "已闭环") {
+        closed++;
+      }
+    });
+    return { pendingReview, needRetraining, closed };
+  }, [filteredRecords, trainingComments]);
+
+  const handleReviewNoteChange = async (recordId: string, value: string) => {
+    setReviewNotes(prev => ({ ...prev, [recordId]: value }));
+    try {
+      await saveReviewNote(recordId, value);
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("讲评备注已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to save review note:", error);
+    }
+  };
+
+  const [releaseOpinions, setReleaseOpinions] = useState<Record<string, string>>({});
+
+  const handleReleaseOpinionChange = (recordId: string, value: string) => {
+    setReleaseOpinions(prev => ({ ...prev, [recordId]: value }));
+  };
+
+  const handleReleaseReview = async (recordId: string, status: "passed" | "rejected") => {
+    const record = reviewRecords.find(r => r.id === recordId);
+    if (!record) return;
+    const opinion = releaseOpinions[recordId] || "";
+    
+    if (record.status.includes("缺陷") && opinion.trim() === "") {
+      alert("缺陷项必须填写复核意见！请说明处置理由。");
+      return;
+    }
+
+    const review: ReleaseReviewResult = {
+      recordId,
+      status,
+      opinion,
+      reviewer: "放行人员",
+      reviewedAt: Date.now()
+    };
+    try {
+      await saveReleaseReview(review);
+      setReleaseReviews(prev => ({ ...prev, [recordId]: review }));
+      
+      const isDefect = record.status.includes("缺陷");
+      let newStatus: string;
+      if (status === "passed") {
+        newStatus = isDefect ? "缺陷" : "正常";
+      } else {
+        newStatus = "待复核";
+      }
+      if (record.status !== newStatus || (opinion && opinion !== record.handling)) {
+        const updatedRecord = { ...record, status: newStatus, handling: opinion || record.handling };
+        const versionedRecord = await updateRecord(updatedRecord);
+        setReviewRecords(prev => prev.map(r => r.id === recordId ? versionedRecord : r));
+        if (record.status !== newStatus) {
+          await recordStatusChange(
+            recordId,
+            record.status,
+            newStatus,
+            status === "passed"
+              ? (isDefect ? `带缺陷放行：${opinion || "无意见"}` : `放行通过：${opinion || "无意见"}`)
+              : `驳回需返工：${opinion || "无意见"}`
+          );
+        }
+      }
+      
+      setReleaseOpinions(prev => {
+        const next = { ...prev };
+        delete next[recordId];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to save release review:", error);
+    }
+  };
+
+  const handleToggleSelectRecord = (recordId: string) => {
+    setSelectedRecordIds(prev => {
+      const next = new Set(prev);
+      if (next.has(recordId)) {
+        next.delete(recordId);
+      } else {
+        next.add(recordId);
+      }
+      return next;
+    });
+  };
+
+  const getDetailRecords = () => {
+    if (!matrixDetailData) return [];
+    return reviewRecords.filter(r =>
+      r.aircraftType === matrixDetailData.aircraftType &&
+      r.ataChapter === matrixDetailData.ataChapter
+    );
+  };
+
+  const getPendingRecordsInDetail = () => {
+    return getDetailRecords().filter(r => {
+      const category = getStatusCategory(r.status);
+      const isReviewed = !!releaseReviews[r.id];
+      return category === "pending" && !isReviewed;
+    });
+  };
+
+  const getDefectRecordsInDetail = () => {
+    return getDetailRecords().filter(r => {
+      const category = getStatusCategory(r.status);
+      return category === "defect";
+    });
+  };
+
+  const getNormalRecordsInDetail = () => {
+    return getDetailRecords().filter(r => {
+      const category = getStatusCategory(r.status);
+      const isReviewed = !!releaseReviews[r.id];
+      return category === "normal" || (category === "pending" && isReviewed);
+    });
+  };
+
+  const handleToggleSelectAllPending = () => {
+    const pendingRecords = getPendingRecordsInDetail();
+    const pendingIds = pendingRecords.map(r => r.id);
+    const allSelected = pendingIds.every(id => selectedRecordIds.has(id));
+    if (allSelected) {
+      setSelectedRecordIds(new Set());
+    } else {
+      setSelectedRecordIds(new Set(pendingIds));
+    }
+  };
+
+  const handleBatchReview = async () => {
+    const pendingRecords = getPendingRecordsInDetail();
+    const selectedPending = pendingRecords.filter(r => selectedRecordIds.has(r.id));
+    if (selectedPending.length === 0) {
+      alert("请先选择要批量复核的待复核记录");
+      return;
+    }
+    const confirmed = window.confirm(
+      `确认批量通过 ${selectedPending.length} 条待复核记录？\n复核意见：${batchOpinion || "（无意见）"}`
+    );
+    if (!confirmed) return;
+    try {
+      const now = Date.now();
+      const newReviews: ReleaseReviewResult[] = [];
+      const updatedRecords: ReviewRecord[] = [];
+      const historyItems: StatusHistoryItem[] = [];
+      for (const record of selectedPending) {
+        const isDefect = record.status.includes("缺陷");
+        const review: ReleaseReviewResult = {
+          recordId: record.id,
+          status: "passed",
+          opinion: batchOpinion,
+          reviewer: "放行人员",
+          reviewedAt: now
+        };
+        newReviews.push(review);
+        const newStatus = isDefect ? "缺陷" : "正常";
+        if (record.status !== newStatus || (batchOpinion && batchOpinion !== record.handling)) {
+          const updatedRecord = { ...record, status: newStatus, handling: batchOpinion || record.handling };
+          updatedRecords.push(updatedRecord);
+          if (record.status !== newStatus) {
+            const historyItem: StatusHistoryItem = {
+              id: `hist-${now}-${Math.random().toString(36).slice(2, 7)}`,
+              recordId: record.id,
+              fromStatus: record.status,
+              toStatus: newStatus,
+              operatorRole: activeRole as DBUserRole,
+              operatorName: activeRole,
+              changedAt: now,
+              remark: `批量放行通过：${batchOpinion || "无意见"}`
+            };
+            historyItems.push(historyItem);
+          }
+        }
+      }
+      for (const review of newReviews) {
+        await saveReleaseReview(review);
+      }
+      const versionedRecords: ReviewRecord[] = [];
+      for (const record of updatedRecords) {
+        const versioned = await updateRecord(record);
+        versionedRecords.push(versioned);
+      }
+      const versionedHistory: StatusHistoryItem[] = [];
+      for (const history of historyItems) {
+        const versioned = await addStatusHistory(history);
+        versionedHistory.push(versioned);
+      }
+      setReleaseReviews(prev => {
+        const next = { ...prev };
+        newReviews.forEach(r => { next[r.recordId] = r; });
+        return next;
+      });
+      setReviewRecords(prev => {
+        const next = [...prev];
+        versionedRecords.forEach(ur => {
+          const idx = next.findIndex(r => r.id === ur.id);
+          if (idx !== -1) next[idx] = ur;
+        });
+        return next;
+      });
+      setStatusHistory(prev => {
+        const next = { ...prev };
+        versionedHistory.forEach(h => {
+          if (!next[h.recordId]) next[h.recordId] = [];
+          next[h.recordId] = [h, ...next[h.recordId]];
+        });
+        return next;
+      });
+      setSelectedRecordIds(new Set());
+      setBatchOpinion("");
+      alert(`已成功批量通过 ${selectedPending.length} 条记录`);
+    } catch (error) {
+      console.error("Failed to batch review:", error);
+      alert("批量复核失败，请重试");
+    }
+  };
+
+  const handleStatusTransition = async (
+    recordId: string,
+    transitionIndex: number
+  ) => {
+    const record = reviewRecords.find(r => r.id === recordId);
+    if (!record) return;
+    const config = findRecordWorkflowConfig(record);
+    if (!config) {
+      alert("未找到该记录对应的工作流配置");
+      return;
+    }
+    const transitions = getAvailableStatusTransitions(config, record.status, activeRole);
+    const transition = transitions[transitionIndex];
+    if (!transition) {
+      alert("无效的状态流转操作");
+      return;
+    }
+    const requiredFieldKeys = transition.requiredFields ?? [];
+    if (requiredFieldKeys.length > 0) {
+      const requiredFieldConfigs = requiredFieldKeys
+        .map(key => config.fields.find(f => f.key === key))
+        .filter((f): f is FieldConfig => Boolean(f));
+      const recordData = record as unknown as Record<string, string>;
+      const missingFields: string[] = [];
+      requiredFieldConfigs.forEach(field => {
+        const value = recordData[field.key] || "";
+        if (value.trim() === "") {
+          missingFields.push(field.label);
+        }
+      });
+      if (missingFields.length > 0) {
+        alert(`执行"${transition.label}"前请填写：${missingFields.join("、")}`);
+        return;
+      }
+    }
+    const confirmed = window.confirm(
+      `确认执行"${transition.label}"操作？\n状态将从「${transition.from}」变更为「${transition.to}」`
+    );
+    if (!confirmed) return;
+    const fromStatus = record.status;
+    const toStatus = transition.to;
+    try {
+      const updatedRecord = { ...record, status: toStatus };
+      const versionedRecord = await updateRecord(updatedRecord);
+      setReviewRecords(prev => prev.map(r => r.id === recordId ? versionedRecord : r));
+      await recordStatusChange(
+        recordId,
+        fromStatus,
+        toStatus,
+        `${activeRole}执行"${transition.label}"操作`
+      );
+      if (toStatus === "缺陷") {
+        const existingDefect = Object.values(defectsRef.current).find(d => d.sourceRecordId === recordId);
+        if (!existingDefect) {
+          setCreateDefectSourceRecord(versionedRecord);
+          setCreateDefectPriority("medium");
+          setCreateDefectExpectedTime("");
+          setIsCreateDefectModalOpen(true);
+        }
+      }
+      if (fromStatus === "缺陷" && toStatus === "正常") {
+        const relatedDefect = Object.values(defectsRef.current).find(
+          d => d.sourceRecordId === recordId && (d.status === "pending" || d.status === "processing")
+        );
+        if (relatedDefect) {
+          const now = Date.now();
+          const updatedDefect: DefectItem = {
+            ...relatedDefect,
+            status: "completed",
+            completedNote: `关联检查记录状态已流转为"正常"，缺陷自动关闭`,
+            completedAt: now,
+            updatedAt: now
+          };
+          const versionedDefect = await updateDefect(updatedDefect);
+          setDefects(prev => ({ ...prev, [relatedDefect.id]: versionedDefect }));
+        }
+      }
+      if (releaseReviews[recordId] && toStatus === "待复核") {
+        setReleaseReviews(prev => {
+          const next = { ...prev };
+          delete next[recordId];
+          return next;
+        });
+      }
+    } catch (error) {
+      console.error("Failed to execute status transition:", error);
+    }
+  };
+
+  const handleGenerateDefectFromRecord = (record: ReviewRecord) => {
+    const existingDefect = Object.values(defectsRef.current).find(d => d.sourceRecordId === record.id);
+    if (existingDefect) {
+      alert("该缺陷项已存在于待处理清单中！");
+      return;
+    }
+    setCreateDefectSourceRecord(record);
+    setCreateDefectPriority("medium");
+    setCreateDefectExpectedTime("");
+    setIsCreateDefectModalOpen(true);
+  };
+
+  const handleConfirmCreateDefect = async () => {
+    if (!createDefectSourceRecord) return;
+    try {
+      const options: { priority?: DefectPriority; expectedCompletionTime?: number } = {
+        priority: createDefectPriority
+      };
+      if (createDefectExpectedTime) {
+        options.expectedCompletionTime = new Date(createDefectExpectedTime).getTime();
+      }
+      const defect = await createDefectFromRecord(createDefectSourceRecord, options);
+      setDefects(prev => ({ ...prev, [defect.id]: defect }));
+      setIsCreateDefectModalOpen(false);
+      setCreateDefectSourceRecord(null);
+      alert("缺陷项已添加到待处理清单！");
+    } catch (error) {
+      console.error("Failed to generate defect from record:", error);
+      alert("生成缺陷项失败，请重试。");
+    }
+  };
+
+  const handleCancelCreateDefect = () => {
+    setIsCreateDefectModalOpen(false);
+    setCreateDefectSourceRecord(null);
+  };
+
+  const handleDefectPriorityOrTimeSave = async (defectId: string, field: "priority" | "expectedCompletionTime", value: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+    const updatedDefect: DefectItem = {
+      ...defect,
+      [field]: field === "expectedCompletionTime" && value ? new Date(value).getTime() : (field === "expectedCompletionTime" ? undefined : value),
+      updatedAt: Date.now()
+    };
+    try {
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to update defect:", error);
+    }
+  };
+
+  const handleDefectFormChange = (defectId: string, field: string, value: string) => {
+    const defect = defects[defectId];
+    setDefectFormValues(prev => ({
+      ...prev,
+      [defectId]: {
+        ...prev[defectId],
+        handlingOpinion: prev[defectId]?.handlingOpinion ?? "",
+        assignedSigner: prev[defectId]?.assignedSigner ?? "",
+        rejectedReason: prev[defectId]?.rejectedReason ?? "",
+        completedNote: prev[defectId]?.completedNote ?? "",
+        priority: prev[defectId]?.priority ?? defect?.priority ?? "medium",
+        expectedCompletionTime: prev[defectId]?.expectedCompletionTime ?? formatDateTimeLocalValue(defect?.expectedCompletionTime),
+        [field]: value
+      }
+    }));
+  };
+
+  const handleStartProcessing = async (defectId: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const formVals = defectFormValues[defectId] || {};
+    const handlingOpinion = formVals.handlingOpinion || defect.handlingOpinion;
+    const assignedSigner = formVals.assignedSigner || defect.assignedSigner;
+    const priority = (formVals.priority as DefectPriority) || defect.priority;
+    const expectedCompletionTime = formVals.expectedCompletionTime
+      ? new Date(formVals.expectedCompletionTime).getTime()
+      : defect.expectedCompletionTime;
+
+    if (!handlingOpinion.trim()) {
+      alert("请填写处理意见！");
+      return;
+    }
+    if (!assignedSigner.trim()) {
+      alert("请指定签署人！");
+      return;
+    }
+
+    const updatedDefect: DefectItem = {
+      ...defect,
+      handlingOpinion,
+      assignedSigner,
+      priority,
+      expectedCompletionTime,
+      status: "processing",
+      updatedAt: Date.now()
+    };
+
+    try {
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to start processing defect:", error);
+    }
+  };
+
+  const handleCompleteDefect = async (defectId: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const formVals = defectFormValues[defectId] || {};
+    const completedNote = formVals.completedNote || "";
+
+    const confirmed = window.confirm("确认标记该缺陷为已完成？完成后将移至历史记录。");
+    if (!confirmed) return;
+
+    const now = Date.now();
+    const updatedDefect: DefectItem = {
+      ...defect,
+      status: "completed",
+      completedNote,
+      completedAt: now,
+      updatedAt: now
+    };
+
+    try {
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
+      setDefectFormValues(prev => {
+        const next = { ...prev };
+        delete next[defectId];
+        return next;
+      });
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to complete defect:", error);
+    }
+  };
+
+  const handleRejectDefect = async (defectId: string, rejectedReasonOverride?: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const formVals = defectFormValues[defectId] || {};
+    const rejectedReason = rejectedReasonOverride || formVals.rejectedReason || "";
+
+    if (!rejectedReason.trim()) {
+      alert("请填写退回复核原因！");
+      return;
+    }
+
+    const confirmed = window.confirm("确认退回该缺陷？退回后需要重新处理。");
+    if (!confirmed) return;
+
+    const now = Date.now();
+    const updatedDefect: DefectItem = {
+      ...defect,
+      status: "rejected",
+      rejectedReason,
+      rejectedAt: now,
+      updatedAt: now
+    };
+
+    try {
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
+      setDefectFormValues(prev => {
+        const next = { ...prev };
+        delete next[defectId];
+        return next;
+      });
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to reject defect:", error);
+    }
+  };
+
+  const handleReopenDefect = async (defectId: string) => {
+    const defect = defects[defectId];
+    if (!defect) return;
+
+    const confirmed = window.confirm("确认重新打开该缺陷？将重新进入待处理状态。");
+    if (!confirmed) return;
+
+    const updatedDefect: DefectItem = {
+      ...defect,
+      status: "pending",
+      handlingOpinion: "",
+      assignedSigner: "",
+      completedNote: undefined,
+      completedAt: undefined,
+      rejectedReason: undefined,
+      rejectedAt: undefined,
+      updatedAt: Date.now()
+    };
+
+    try {
+      const versionedDefect = await updateDefect(updatedDefect);
+      setDefects(prev => ({ ...prev, [defectId]: versionedDefect }));
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("缺陷更新已暂存本地");
+      }
+    } catch (error) {
+      console.error("Failed to reopen defect:", error);
+    }
+  };
+
+  const handleDeleteDefect = async (defectId: string) => {
+    const confirmed = window.confirm("确认删除该缺陷记录？此操作不可恢复。");
+    if (!confirmed) return;
+
+    try {
+      await deleteDefect(defectId);
+      setDefects(prev => {
+        const next = { ...prev };
+        delete next[defectId];
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to delete defect:", error);
+    }
+  };
+
+  const PRIORITY_WEIGHT: Record<DefectPriority, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1
+  };
 
   const PRIORITY_TEXT: Record<DefectPriority, string> = {
     critical: "紧急",
     high: "高",
     medium: "中",
     low: "低"
+  };
+
+  const getPriorityBadgeClass = (priority: DefectPriority): string => {
+    switch (priority) {
+      case "critical": return "defect-priority-critical";
+      case "high": return "defect-priority-high";
+      case "medium": return "defect-priority-medium";
+      case "low": return "defect-priority-low";
+    }
+  };
+
+  const SOON_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+  const formatDateTimeLocalValue = (timestamp?: number): string => {
+    if (!timestamp) return "";
+    const d = new Date(timestamp);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const getDefaultDefectFormValues = (defect: DefectItem) => ({
+    handlingOpinion: "",
+    assignedSigner: "",
+    rejectedReason: "",
+    completedNote: "",
+    priority: defect.priority || "medium",
+    expectedCompletionTime: formatDateTimeLocalValue(defect.expectedCompletionTime)
+  });
+
+  const getTimeStatus = (defect: DefectItem): { status: "overdue" | "soon" | "normal" | "none"; remainingMs: number; displayText: string } => {
+    const now = Date.now();
+    if (!defect.expectedCompletionTime) {
+      return { status: "none", remainingMs: 0, displayText: "未设期限" };
+    }
+    const remainingMs = defect.expectedCompletionTime - now;
+    const absMs = Math.abs(remainingMs);
+    const absDays = Math.floor(absMs / (24 * 60 * 60 * 1000));
+    const absHours = Math.floor((absMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+    const absMinutes = Math.floor((absMs % (60 * 60 * 1000)) / (60 * 1000));
+
+    const formatDuration = (ms: number): string => {
+      const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+      const hours = Math.floor((ms % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+      const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+      if (days > 0) return `${days}天${hours}小时`;
+      if (hours > 0) return `${hours}小时${minutes}分`;
+      return `${minutes}分钟`;
+    };
+
+    if (remainingMs < 0) {
+      return {
+        status: "overdue",
+        remainingMs,
+        displayText: `已逾期 ${formatDuration(absMs)}`
+      };
+    } else if (remainingMs <= SOON_THRESHOLD_MS) {
+      return {
+        status: "soon",
+        remainingMs,
+        displayText: `剩余 ${formatDuration(remainingMs)}`
+      };
+    } else {
+      return {
+        status: "normal",
+        remainingMs,
+        displayText: `剩余 ${formatDuration(remainingMs)}`
+      };
+    }
+  };
+
+  const isOverdue = (defect: DefectItem): boolean => {
+    return !!defect.expectedCompletionTime && defect.expectedCompletionTime < Date.now();
+  };
+
+  const isSoonOverdue = (defect: DefectItem): boolean => {
+    if (!defect.expectedCompletionTime) return false;
+    const remaining = defect.expectedCompletionTime - Date.now();
+    return remaining > 0 && remaining <= SOON_THRESHOLD_MS;
+  };
+
+  const defectStats = useMemo(() => {
+    const allDefects = Object.values(defects);
+    const pending = allDefects.filter(d => d.status === "pending").length;
+    const processing = allDefects.filter(d => d.status === "processing").length;
+    const completed = allDefects.filter(d => d.status === "completed").length;
+    const rejected = allDefects.filter(d => d.status === "rejected").length;
+    const activeDefects = allDefects.filter(d => d.status === "pending" || d.status === "processing");
+    const overdue = activeDefects.filter(d => isOverdue(d)).length;
+    const soonOverdue = activeDefects.filter(d => isSoonOverdue(d)).length;
+    return { total: allDefects.length, pending, processing, completed, rejected, overdue, soonOverdue };
+  }, [defects, timeTick]);
+
+  const groupedDefects = useMemo(() => {
+    const allDefects = Object.values(defects);
+    const pending = allDefects
+      .filter(d => d.status === "pending" || d.status === "processing")
+      .sort((a, b) => {
+        const aOverdue = isOverdue(a) ? 1 : 0;
+        const bOverdue = isOverdue(b) ? 1 : 0;
+        if (aOverdue !== bOverdue) return bOverdue - aOverdue;
+        const aPriority = PRIORITY_WEIGHT[a.priority] || 0;
+        const bPriority = PRIORITY_WEIGHT[b.priority] || 0;
+        if (aPriority !== bPriority) return bPriority - aPriority;
+        return b.createdAt - a.createdAt;
+      });
+    const history = allDefects.filter(d => d.status === "completed" || d.status === "rejected");
+    return { pending, history };
+  }, [defects, timeTick]);
+
+  const getDefectSourceRecord = (sourceRecordId: string): ReviewRecord | undefined => {
+    return reviewRecords.find(r => r.id === sourceRecordId);
+  };
+
+  const releaseStats = useMemo(() => {
+    let normal = 0;
+    let pending = 0;
+    let defect = 0;
+    let reviewed = 0;
+    let passed = 0;
+    let rejected = 0;
+    let defectReviewed = 0;
+
+    filteredRecords.forEach(r => {
+      const review = releaseReviews[r.id];
+      const isDefect = r.status.includes("缺陷");
+      const isNormal = r.status.includes("正常") || r.status.includes("完成");
+      const isPendingReview = r.status.includes("待复核");
+
+      if (isDefect) {
+        defect++;
+        if (review) {
+          reviewed++;
+          defectReviewed++;
+        }
+      } else if (isNormal) {
+        normal++;
+        if (review) {
+          reviewed++;
+          if (review.status === "passed") {
+            passed++;
+          } else if (review.status === "rejected") {
+            rejected++;
+          }
+        }
+      } else if (isPendingReview) {
+        pending++;
+        if (review) {
+          reviewed++;
+          if (review.status === "passed") {
+            passed++;
+          } else if (review.status === "rejected") {
+            rejected++;
+          }
+        }
+      }
+    });
+
+    const totalPending = filteredRecords.length - passed;
+
+    return {
+      total: filteredRecords.length,
+      normal,
+      pending,
+      defect,
+      reviewed,
+      passed,
+      rejected,
+      defectReviewed,
+      totalPending
+    };
+  }, [filteredRecords, releaseReviews]);
+
+  const groupedRecords = useMemo(() => {
+    const normal: ReviewRecord[] = [];
+    const pending: ReviewRecord[] = [];
+    const defect: ReviewRecord[] = [];
+
+    filteredRecords.forEach(r => {
+      if (r.status.includes("缺陷")) {
+        defect.push(r);
+      } else if (r.status.includes("待复核")) {
+        pending.push(r);
+      } else {
+        normal.push(r);
+      }
+    });
+
+    return { normal, pending, defect };
+  }, [filteredRecords]);
+
+  const matrixData = useMemo(() => {
+    const aircraftTypes = Array.from(new Set(reviewRecords.map(r => r.aircraftType))).sort();
+    const ataChapters = Array.from(new Set(reviewRecords.map(r => r.ataChapter))).sort();
+    
+    const matrix: Record<string, Record<string, ReviewRecord[]>> = {};
+    
+    aircraftTypes.forEach(aircraft => {
+      matrix[aircraft] = {};
+      ataChapters.forEach(chapter => {
+        matrix[aircraft][chapter] = filteredRecords.filter(
+          r => r.aircraftType === aircraft && r.ataChapter === chapter
+        );
+      });
+    });
+
+    return { aircraftTypes, ataChapters, matrix };
+  }, [reviewRecords, filteredRecords]);
+
+  const getCellStatus = (records: ReviewRecord[]): StatusCategory | "not-started" => {
+    if (records.length === 0) return "not-started";
+    const allStatuses = workflowConfigsState.flatMap(c => c.statuses);
+    return getMatrixCellStatus(records, allStatuses);
+  };
+
+  const handleMatrixCellClick = (aircraftType: string, ataChapter: string) => {
+    const records = matrixData.matrix[aircraftType]?.[ataChapter] || [];
+    setMatrixDetailData({ aircraftType, ataChapter, records });
+    setSelectedRecordIds(new Set());
+    setBatchOpinion("");
+    setIsMatrixDetailOpen(true);
+  };
+
+  const closeMatrixDetail = () => {
+    setIsMatrixDetailOpen(false);
+    setMatrixDetailData(null);
+    setSelectedRecordIds(new Set());
+    setBatchOpinion("");
+  };
+
+  const handleFormChange = (field: keyof FormValues, value: string) => {
+    setFormValues(prev => ({ ...prev, [field]: value }));
+  };
+
+  const findRecordWorkflowConfig = (record: ReviewRecord): WorkflowConfig | undefined => {
+    if (record.workflowConfigId) {
+      const byId = workflowConfigsState.find(c => c.id === record.workflowConfigId);
+      if (byId) return byId;
+    }
+    const byMatch = findWorkflowConfig(workflowConfigsState, record.aircraftType, record.ataChapter, record.checkArea);
+    if (byMatch) return byMatch;
+    const fallbackConfig: WorkflowConfig = {
+      id: `fallback-${record.aircraftType}-${record.ataChapter}-${record.checkArea}`,
+      aircraftType: record.aircraftType,
+      ataChapter: record.ataChapter,
+      checkArea: record.checkArea,
+      displayName: `${record.aircraftType} ${record.checkArea}检查（兼容模式）`,
+      steps: [
+        { id: "step-1", name: "待复核", description: "维修工程师完成检查后提交复核", fields: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling"], order: 1 },
+        { id: "step-2", name: "正常", description: "放行人员复核通过", fields: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling", "signer"], order: 2 },
+        { id: "step-3", name: "缺陷", description: "存在缺陷需要处理", fields: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling", "signer"], order: 3 }
+      ],
+      fields: [
+        { key: "aircraftType", label: "机型", type: "select", required: true, options: [record.aircraftType], placeholder: "选择机型" },
+        { key: "ataChapter", label: "ATA章节", type: "select", required: true, options: [record.ataChapter], placeholder: "选择ATA章节" },
+        { key: "checkArea", label: "检查区域", type: "select", required: true, options: [record.checkArea], placeholder: "选择检查区域" },
+        { key: "checkItem", label: "检查项目", type: "text", required: false, placeholder: "填写检查项目" },
+        { key: "status", label: "状态", type: "select", required: true, options: ["待复核", "正常", "缺陷"], placeholder: "选择状态" },
+        { key: "defectDesc", label: "缺陷描述", type: "textarea", required: false, placeholder: "填写缺陷描述", fullWidth: true },
+        { key: "handling", label: "处理意见", type: "textarea", required: false, placeholder: "填写处理意见", fullWidth: true },
+        { key: "signer", label: "签署人", type: "text", required: false, placeholder: "填写签署人", fullWidth: true }
+      ],
+      statuses: ["待复核", "正常", "缺陷"],
+      statusTransitions: [
+        { from: "待复核", to: "正常", label: "通过复核", allowedRoles: ["放行人员"], colorClass: "pass-btn" },
+        { from: "待复核", to: "缺陷", label: "标记缺陷", allowedRoles: ["放行人员", "维修工程师"], colorClass: "reject-btn" },
+        { from: "缺陷", to: "正常", label: "修复完成", allowedRoles: ["放行人员"], requiredFields: ["handling"], colorClass: "pass-btn" },
+        { from: "正常", to: "待复核", label: "重新复核", allowedRoles: ["培训教员", "放行人员"], colorClass: "reject-btn" }
+      ],
+      initialStatus: "待复核",
+      metrics: [
+        { key: "completionRate", label: "完成率", type: "percentage", source: "records", filter: { status: ["正常"] }, colorIndex: 0 },
+        { key: "defectCount", label: "缺陷项", type: "count", source: "records", filter: { status: ["缺陷"] }, colorIndex: 2 },
+        { key: "pendingReview", label: "待复核", type: "count", source: "records", filter: { status: ["待复核"] }, colorIndex: 1 }
+      ],
+      filters: [],
+      rolePermissions: {
+        "维修工程师": { canEdit: ["aircraftType", "ataChapter", "checkArea", "checkItem", "defectDesc", "handling", "status"], canView: true, canCreateDefect: true },
+        "放行人员": { canEdit: ["status", "handling", "signer"], canView: true, canReview: true, canCreateDefect: true },
+        "培训教员": { canEdit: [], canView: true }
+      },
+      _fallback: true
+    };
+    return fallbackConfig;
+  };
+
+  const handleAddWorkflowConfig = async () => {
+    if (!newConfigAircraftType.trim() || !newConfigAtaChapter.trim() || !newConfigCheckArea.trim()) {
+      alert("请填写机型、ATA章节和检查区域");
+      return;
+    }
+    const exists = workflowConfigsState.find(
+      c => c.aircraftType === newConfigAircraftType.trim() &&
+           c.ataChapter === newConfigAtaChapter.trim() &&
+           c.checkArea === newConfigCheckArea.trim()
+    );
+    if (exists) {
+      alert("该机型/ATA章节/检查区域的配置已存在");
+      return;
+    }
+    const newConfig = createDefaultConfig(newConfigAircraftType.trim(), newConfigAtaChapter.trim(), newConfigCheckArea.trim());
+    await saveWorkflowConfig(newConfig);
+    const configs = await getAllWorkflowConfigs();
+    setWorkflowConfigsState(configs);
+    setNewConfigAircraftType("");
+    setNewConfigAtaChapter("");
+    setNewConfigCheckArea("");
+  };
+
+  const handleDeleteWorkflowConfig = async (id: string) => {
+    const confirmed = window.confirm("确认删除此工作流配置？已有记录的展示将退回到兼容模式。");
+    if (!confirmed) return;
+    await deleteWorkflowConfig(id);
+    const configs = await getAllWorkflowConfigs();
+    setWorkflowConfigsState(configs);
+  };
+
+  const handleSaveEditingConfig = async () => {
+    if (!editingConfig) return;
+    await saveWorkflowConfig(editingConfig);
+    const configs = await getAllWorkflowConfigs();
+    setWorkflowConfigsState(configs);
+    setEditingConfig(null);
+  };
+
+  const handleResetWorkflowConfigs = async () => {
+    const confirmed = window.confirm("确认恢复默认工作流配置？自定义配置将被清除。");
+    if (!confirmed) return;
+    const configs = await resetWorkflowConfigsToDefault();
+    setWorkflowConfigsState(configs);
+  };
+
+  const handleAddRecord = async () => {
+    const config = currentWorkflowConfig;
+    const formData = formValues as unknown as Record<string, string>;
+    const visibleFields = getVisibleFields(config);
+    const baseValidation = validateRequiredFields(visibleFields, formData);
+    if (!baseValidation.valid) {
+      alert(`请填写必填字段：${baseValidation.missingFields.join("、")}`);
+      return;
+    }
+
+    const initialStatus = getInitialStatus(config);
+    if (config && formValues.status !== initialStatus) {
+      const transition = getAvailableStatusTransitions(config, initialStatus, activeRole)
+        .find(item => item.to === formValues.status);
+      if (!transition) {
+        alert(`${activeRole}不能将新记录直接流转为${formValues.status}`);
+        return;
+      }
+      const transitionRequiredFields = (transition.requiredFields ?? [])
+        .map(fieldKey => config.fields.find(field => field.key === fieldKey))
+        .filter((field): field is FieldConfig => Boolean(field));
+      const transitionValidation = validateRequiredFields(
+        transitionRequiredFields.map(field => ({ ...field, required: true })),
+        formData
+      );
+      if (!transitionValidation.valid) {
+        alert(`状态流转到${formValues.status}前请填写：${transitionValidation.missingFields.join("、")}`);
+        return;
+      }
+    }
+
+    const newRecord: ReviewRecord = {
+      id: `review-${Date.now()}`,
+      aircraftType: formValues.aircraftType,
+      ataChapter: formValues.ataChapter,
+      checkArea: formValues.checkArea,
+      checkItem: formValues.checkItem,
+      status: formValues.status,
+      defectDesc: formValues.defectDesc,
+      handling: formValues.handling,
+      workflowConfigId: currentWorkflowConfig?.id
+    };
+
+    const formAny = formValues as Record<string, any>;
+    const baseKeys = new Set([
+      "aircraftType", "ataChapter", "checkArea", "checkItem",
+      "status", "defectDesc", "handling", "signer"
+    ]);
+    const visibleFieldKeys = new Set(visibleFields.map(field => field.key));
+    Array.from(visibleFieldKeys).forEach(key => {
+      if (!baseKeys.has(key) && formAny[key] !== undefined && formAny[key] !== null && String(formAny[key]).trim() !== "") {
+        (newRecord as any)[key] = formAny[key];
+      }
+    });
+    if (formAny.signer && formAny.signer.trim()) {
+      newRecord.signer = formAny.signer;
+    }
+
+    try {
+      const versionedRecord = await addRecord(newRecord);
+      setReviewRecords(prev => [...prev, versionedRecord]);
+      await recordStatusChange(newRecord.id, "新建", formValues.status, `${activeRole}提交检查记录`);
+      if (networkStatus === "offline") {
+        showOfflineSaveToast("新增记录已暂存本地");
+      }
+      setFormValues({ ...emptyForm, status: getInitialStatus(config) });
+    } catch (error) {
+      console.error("Failed to add record:", error);
+    }
+  };
+
+  const handleTemplateFormChange = (field: keyof TemplateFormValues, value: string) => {
+    setTemplateForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  const openNewModal = () => {
+    setEditingTemplate(null);
+    setIsTemplateFromRecord(false);
+    setTemplateForm({
+      name: "",
+      aircraftType: "",
+      ataChapter: "",
+      checkArea: "",
+      checkItem: "",
+      defectDesc: "",
+      handling: "",
+      signer: ""
+    });
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (template: CheckTemplate) => {
+    setEditingTemplate(template);
+    setIsTemplateFromRecord(false);
+    setTemplateForm({
+      name: template.name,
+      aircraftType: template.aircraftType,
+      ataChapter: template.ataChapter,
+      checkArea: template.checkArea,
+      checkItem: template.checkItem,
+      defectDesc: template.defectDesc,
+      handling: template.handling,
+      signer: template.signer
+    });
+    setIsModalOpen(true);
+  };
+
+  const openSaveAsTemplateModal = (record: ReviewRecord) => {
+    setEditingTemplate(null);
+    setIsTemplateFromRecord(true);
+    const defaultName = `${record.aircraftType} ${record.checkArea}检查模板`;
+    setTemplateForm({
+      name: defaultName,
+      aircraftType: record.aircraftType,
+      ataChapter: record.ataChapter,
+      checkArea: record.checkArea,
+      checkItem: record.checkItem || "",
+      defectDesc: record.defectDesc,
+      handling: record.handling,
+      signer: ""
+    });
+    setIsModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setEditingTemplate(null);
+    setIsTemplateFromRecord(false);
+  };
+
+  const isTemplateNameDuplicate = (name: string): boolean => {
+    const trimmedName = name.trim();
+    if (trimmedName === "") return false;
+    return templates.some(t => 
+      t.name.trim() === trimmedName && t.id !== editingTemplate?.id
+    );
+  };
+
+  const saveTemplate = async () => {
+    if (templateForm.name.trim() === "") return;
+
+    if (isTemplateNameDuplicate(templateForm.name)) {
+      const confirmed = window.confirm(
+        `模板名称"${templateForm.name.trim()}"已存在，是否继续保存？`
+      );
+      if (!confirmed) return;
+    }
+
+    if (editingTemplate) {
+      const updated = { ...editingTemplate, ...templateForm };
+      try {
+        await updateTemplate(updated);
+        setTemplates(prev =>
+          prev.map(t => t.id === editingTemplate.id ? updated : t)
+        );
+      } catch (error) {
+        console.error("Failed to update template:", error);
+      }
+    } else {
+      const newTemplate: CheckTemplate = {
+        id: String(Date.now()),
+        ...templateForm
+      };
+      try {
+        await addTemplate(newTemplate);
+        setTemplates(prev => [...prev, newTemplate]);
+      } catch (error) {
+        console.error("Failed to add template:", error);
+      }
+    }
+    closeModal();
+  };
+
+  const deleteTemplate = async (id: string) => {
+    try {
+      await dbDeleteTemplate(id);
+      setTemplates(prev => prev.filter(t => t.id !== id));
+    } catch (error) {
+      console.error("Failed to delete template:", error);
+    }
+  };
+
+  const applyTemplate = (template: CheckTemplate) => {
+    setFormValues({
+      aircraftType: template.aircraftType,
+      ataChapter: template.ataChapter,
+      checkArea: template.checkArea,
+      checkItem: template.checkItem,
+      defectDesc: template.defectDesc,
+      handling: template.handling,
+      signer: template.signer,
+      status: "待复核"
+    });
   };
 
   const generateExportSummary = useMemo(() => {
@@ -1218,9 +2562,9 @@ function App() {
     lines.push(`筛选范围：${recordFilters.aircraftType || "全部机型"} / ${recordFilters.ataChapter || "全部章节"}`);
     lines.push("");
 
-    const total = releaseStatsValue.total;
+    const total = releaseStats.total;
     const completionRate = total > 0
-      ? Math.round((releaseStatsValue.passed / total) * 100)
+      ? Math.round((releaseStats.passed / total) * 100)
       : 0;
 
     lines.push("┌──────────────────────────────────────────────────┐");
@@ -1228,15 +2572,15 @@ function App() {
     lines.push("├──────────────────────────────────────────────────┤");
     lines.push(`│  完成率：     ${String(completionRate).padStart(4)}%${" ".repeat(33)}│`);
     lines.push(`│  记录总数：   ${String(total).padStart(4)} 条${" ".repeat(32)}│`);
-    lines.push(`│  待复核数：   ${String(releaseStatsValue.pending).padStart(4)} 条${" ".repeat(32)}│`);
-    lines.push(`│  缺陷项数：   ${String(releaseStatsValue.defect).padStart(4)} 条${" ".repeat(32)}│`);
-    lines.push(`│  已通过：     ${String(releaseStatsValue.passed).padStart(4)} 条${" ".repeat(32)}│`);
-    lines.push(`│  已驳回：     ${String(releaseStatsValue.rejected).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  待复核数：   ${String(releaseStats.pending).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  缺陷项数：   ${String(releaseStats.defect).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  已通过：     ${String(releaseStats.passed).padStart(4)} 条${" ".repeat(32)}│`);
+    lines.push(`│  已驳回：     ${String(releaseStats.rejected).padStart(4)} 条${" ".repeat(32)}│`);
     lines.push("└──────────────────────────────────────────────────┘");
     lines.push("");
 
     const groupedByAircraft = new Map<string, Map<string, ReviewRecord[]>>();
-    enhancedFilteredRecords.forEach(record => {
+    filteredRecords.forEach(record => {
       if (!groupedByAircraft.has(record.aircraftType)) {
         groupedByAircraft.set(record.aircraftType, new Map());
       }
@@ -1374,11 +2718,11 @@ function App() {
     });
 
     lines.push("═".repeat(50));
-    lines.push(`报告结束  ·  共 ${enhancedFilteredRecords.length} 条记录  ·  异常 ${releaseStatsValue.pending + releaseStatsValue.defect} 条`);
+    lines.push(`报告结束  ·  共 ${filteredRecords.length} 条记录  ·  异常 ${releaseStats.pending + releaseStats.defect} 条`);
     lines.push("═".repeat(50));
 
     return lines.join("\n");
-  }, [enhancedFilteredRecords, releaseStatsValue, recordFilters, releaseReviews, defects, trainingComments]);
+  }, [filteredRecords, releaseStats, recordFilters, releaseReviews, defects, trainingComments]);
 
   const openExportPreview = () => {
     setCopyStatus("idle");
@@ -1411,59 +2755,6 @@ function App() {
     setTimeout(() => setCopyStatus("idle"), 2000);
   };
 
-  const handleReleaseReviewWithRecord = (recordId: string, status: "passed" | "rejected") => {
-    const record = reviewRecords.find(r => r.id === recordId);
-    if (!record) return;
-    handleReleaseReview(record, status);
-  };
-
-  const getDetailRecords = () => {
-    if (!matrixDetailData) return [];
-    return reviewRecords.filter(r =>
-      r.aircraftType === matrixDetailData.aircraftType &&
-      r.ataChapter === matrixDetailData.ataChapter
-    );
-  };
-
-  const getPendingRecordsInDetail = () => {
-    return getPendingRecords(getDetailRecords());
-  };
-
-  const getDefectRecordsInDetail = () => {
-    return getDefectRecords(getDetailRecords());
-  };
-
-  const getNormalRecordsInDetail = () => {
-    return getNormalRecords(getDetailRecords());
-  };
-
-  const handleToggleSelectAllPendingInDetail = () => {
-    handleToggleSelectAllPending(getPendingRecordsInDetail());
-  };
-
-  const handleBatchReviewInDetail = async () => {
-    await handleBatchReview(getPendingRecordsInDetail());
-  };
-
-  const handleStatusTransitionForRecord = (recordId: string, transitionIndex: number) => {
-    handleStatusTransition(
-      recordId,
-      transitionIndex,
-      releaseReviews,
-      defects,
-      (record) => handleGenerateDefectFromRecord(record),
-      (defect) => updateDefectItem(defect)
-    );
-    const record = reviewRecords.find(r => r.id === recordId);
-    if (record && releaseReviews[recordId] && record.status === "待复核") {
-      clearReleaseReview(recordId);
-    }
-  };
-
-  const getDefectSourceRecordLocal = (sourceRecordId: string): ReviewRecord | undefined => {
-    return getDefectSourceRecord(sourceRecordId, reviewRecords);
-  };
-
   if (isLoading) {
     return (
       <main className="app-shell">
@@ -1473,6 +2764,50 @@ function App() {
       </main>
     );
   }
+
+  const pendingCount = getPendingSyncCount();
+  const lastSync = getLastSyncTime();
+  const failedCount = syncQueue.filter(op => !op.synced && op.error).length;
+  const waitingCount = syncQueue.filter(op => !op.synced && !op.error).length;
+
+  const showOfflineSaveToast = (label: string) => {
+    setOfflineSaveToast(label);
+    if (offlineToastTimerRef.current) window.clearTimeout(offlineToastTimerRef.current);
+    offlineToastTimerRef.current = window.setTimeout(() => setOfflineSaveToast(null), 2500);
+  };
+
+  const handleRetryOperation = (opId: string) => {
+    if (networkStatus === "offline") {
+      alert("当前处于离线状态，无法重试。请恢复网络后再操作。");
+      return;
+    }
+    retryOperation(opId);
+  };
+
+  const handleDiscardOperation = (opId: string) => {
+    const confirmed = window.confirm("确认丢弃该操作？丢弃后数据将仅保留在本地，不会再尝试同步。");
+    if (!confirmed) return;
+    removeFromQueue(opId);
+  };
+
+  const handleManualSync = async () => {
+    if (networkStatus === "offline") {
+      alert("当前处于离线状态，请恢复网络后再尝试同步。");
+      return;
+    }
+    await attemptAutoSync();
+  };
+
+  const formatLastSync = (timestamp: number | null) => {
+    if (!timestamp) return "从未同步";
+    return new Date(timestamp).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  };
 
   return (
     <main className="app-shell">
@@ -1800,7 +3135,7 @@ function App() {
           <table className="ata-matrix">
             <thead>
               <tr>
-                <th className="matrix-corner">机型 \\ ATA章节</th>
+                <th className="matrix-corner">机型 \ ATA章节</th>
                 {matrixData.ataChapters.map(chapter => (
                   <th key={chapter} className="matrix-header">{chapter}</th>
                 ))}
@@ -1935,19 +3270,19 @@ function App() {
               )}
               <p className="workflow-info">
                 当前角色：<strong>{activeRole}</strong>
-                {!canRolePerformActionForConfig(currentWorkflowConfig as any, "edit")
+                {!canRolePerformAction(currentWorkflowConfig, activeRole, "edit")
                   ? "（只读模式，无法编辑字段"
-                  : `（可编辑字段：${getRoleEditableFieldsForConfig(currentWorkflowConfig as any).join("、") || "无"}`
-                }
+                  : `（可编辑字段：${getRoleEditableFields(currentWorkflowConfig, activeRole).join("、") || "无"}`
+              }
               </p>
             </div>
-            {canRolePerformActionForConfig(currentWorkflowConfig as any, "create") && (
+            {canRolePerformAction(currentWorkflowConfig, activeRole, "create") && (
               <button className="primary-action" onClick={handleAddRecord}>新增记录</button>
             )}
           </div>
           <div className="field-grid">
             {getVisibleFields(currentWorkflowConfig).map(field => {
-              const isEditable = !currentWorkflowConfig || canRoleEditFieldForConfig(currentWorkflowConfig, field.key);
+              const isEditable = !currentWorkflowConfig || canRoleEditField(currentWorkflowConfig, field.key, activeRole);
               let options = field.options;
               if (field.key === "aircraftType") {
                 options = availableAircraftTypes;
@@ -2456,9 +3791,9 @@ function App() {
               </div>
               <div className="review-actions">
                 <button className="review-summary-btn">
-                  复核进度 {releaseStatsValue.reviewed}/{releaseStatsValue.total}
-                  {releaseStatsValue.defectReviewed > 0 && (
-                    <span className="defect-review-count"> · 缺陷 {releaseStatsValue.defectReviewed}</span>
+                  复核进度 {releaseStats.reviewed}/{releaseStats.total}
+                  {releaseStats.defectReviewed > 0 && (
+                    <span className="defect-review-count"> · 缺陷 {releaseStats.defectReviewed}</span>
                   )}
                 </button>
                 <button className="primary-action" onClick={openExportPreview}>
@@ -2470,74 +3805,43 @@ function App() {
             <div className="release-metrics">
               <div className="release-metric">
                 <span>记录总数</span>
-                <strong>{releaseStatsValue.total}</strong>
+                <strong>{releaseStats.total}</strong>
               </div>
               <div className="release-metric release-metric-ok">
                 <span>正常</span>
-                <strong>{releaseStatsValue.normal}</strong>
+                <strong>{releaseStats.normal}</strong>
               </div>
               <div className="release-metric release-metric-watch">
                 <span>待复核</span>
-                <strong>{releaseStatsValue.pending}</strong>
+                <strong>{releaseStats.pending}</strong>
               </div>
               <div className="release-metric release-metric-danger">
                 <span>缺陷项</span>
-                <strong>{releaseStatsValue.defect}</strong>
+                <strong>{releaseStats.defect}</strong>
               </div>
               <div className="release-metric release-metric-primary">
                 <span>已通过</span>
-                <strong>{releaseStatsValue.passed}</strong>
+                <strong>{releaseStats.passed}</strong>
               </div>
               <div className="release-metric release-metric-rejected">
                 <span>已驳回</span>
-                <strong>{releaseStatsValue.rejected}</strong>
+                <strong>{releaseStats.rejected}</strong>
               </div>
             </div>
-
-            {getPendingRecords(reviewRecords).length > 0 && (
-              <div className="batch-review-section">
-                <div className="batch-review-header">
-                  <label className="batch-select-all">
-                    <input
-                      type="checkbox"
-                      checked={getPendingRecords(reviewRecords).length > 0 && getPendingRecords(reviewRecords).every(r => selectedRecordIds.has(r.id))}
-                      onChange={() => handleToggleSelectAllPending(getPendingRecords(reviewRecords))}
-                    />
-                    <span>全选待复核 ({getPendingRecords(reviewRecords).length})</span>
-                  </label>
-                  <div className="batch-review-actions">
-                    <textarea
-                      className="batch-opinion-input"
-                      placeholder="批量复核意见（可选）..."
-                      value={batchOpinion}
-                      onChange={e => setBatchOpinion(e.target.value)}
-                      rows={2}
-                    />
-                    <button
-                      className="primary-action batch-review-btn"
-                      onClick={() => handleBatchReview(getPendingRecords(reviewRecords))}
-                      disabled={selectedRecordIds.size === 0}
-                    >
-                      批量通过 ({selectedRecordIds.size})
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
 
           <div className="release-groups">
             <div className="release-group">
               <div className="release-group-header release-group-ok">
                 <h3>正常</h3>
-                <span className="group-count">{groupedRecordsValue.normal.length}</span>
+                <span className="group-count">{groupedRecords.normal.length}</span>
               </div>
               <div className="release-group-list">
-                {groupedRecordsValue.normal.length === 0 ? (
+                {groupedRecords.normal.length === 0 ? (
                   <div className="empty-state small">
                     <p>暂无正常记录</p>
                   </div>
                 ) : (
-                  groupedRecordsValue.normal.map((record, index) => (
+                  groupedRecords.normal.map((record, index) => (
                     <ReleaseReviewCard
                       key={record.id}
                       record={record}
@@ -2545,7 +3849,7 @@ function App() {
                       review={releaseReviews[record.id]}
                       opinion={releaseOpinions[record.id] || ""}
                       onOpinionChange={handleReleaseOpinionChange}
-                      onReview={handleReleaseReviewWithRecord}
+                      onReview={handleReleaseReview}
                       recordType="normal"
                       history={statusHistory[record.id]}
                       showHistory={activeHistoryRecordId === record.id}
@@ -2561,15 +3865,15 @@ function App() {
             <div className="release-group">
               <div className="release-group-header release-group-watch">
                 <h3>待复核</h3>
-                <span className="group-count">{groupedRecordsValue.pending.length}</span>
+                <span className="group-count">{groupedRecords.pending.length}</span>
               </div>
               <div className="release-group-list">
-                {groupedRecordsValue.pending.length === 0 ? (
+                {groupedRecords.pending.length === 0 ? (
                   <div className="empty-state small">
                     <p>暂无待复核记录</p>
                   </div>
                 ) : (
-                  groupedRecordsValue.pending.map((record, index) => (
+                  groupedRecords.pending.map((record, index) => (
                     <ReleaseReviewCard
                       key={record.id}
                       record={record}
@@ -2577,7 +3881,7 @@ function App() {
                       review={releaseReviews[record.id]}
                       opinion={releaseOpinions[record.id] || ""}
                       onOpinionChange={handleReleaseOpinionChange}
-                      onReview={handleReleaseReviewWithRecord}
+                      onReview={handleReleaseReview}
                       recordType="pending"
                       history={statusHistory[record.id]}
                       showHistory={activeHistoryRecordId === record.id}
@@ -2593,15 +3897,15 @@ function App() {
             <div className="release-group">
               <div className="release-group-header release-group-danger">
                 <h3>缺陷</h3>
-                <span className="group-count">{groupedRecordsValue.defect.length}</span>
+                <span className="group-count">{groupedRecords.defect.length}</span>
               </div>
               <div className="release-group-list">
-                {groupedRecordsValue.defect.length === 0 ? (
+                {groupedRecords.defect.length === 0 ? (
                   <div className="empty-state small">
                     <p>暂无缺陷记录</p>
                   </div>
                 ) : (
-                  groupedRecordsValue.defect.map((record, index) => (
+                  groupedRecords.defect.map((record, index) => (
                     <ReleaseReviewCard
                       key={record.id}
                       record={record}
@@ -2609,7 +3913,7 @@ function App() {
                       review={releaseReviews[record.id]}
                       opinion={releaseOpinions[record.id] || ""}
                       onOpinionChange={handleReleaseOpinionChange}
-                      onReview={handleReleaseReviewWithRecord}
+                      onReview={handleReleaseReview}
                       recordType="defect"
                       history={statusHistory[record.id]}
                       showHistory={activeHistoryRecordId === record.id}
@@ -2685,10 +3989,10 @@ function App() {
                   </div>
                 ) : (
                   groupedDefects.pending.map((defect, index) => {
-                    const srcRecord = getDefectSourceRecordLocal(defect.sourceRecordId);
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
                     const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
                     const transitions = srcRecord && srcConfig
-                      ? getAvailableStatusTransitionsForRecord(srcConfig, srcRecord.status)
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
                       : [];
                     return (
                       <DefectCard
@@ -2705,7 +4009,7 @@ function App() {
                         onDelete={handleDeleteDefect}
                         isHistory={false}
                         statusTransitions={transitions.length > 0 ? transitions : undefined}
-                        onStatusTransition={handleStatusTransitionForRecord}
+                        onStatusTransition={handleStatusTransition}
                         sourceRecordId={srcRecord?.id}
                         showLifecycleActions={false}
                         getTimeStatus={getTimeStatus}
@@ -2725,10 +4029,10 @@ function App() {
                   </div>
                 ) : (
                   groupedDefects.history.map((defect, index) => {
-                    const srcRecord = getDefectSourceRecordLocal(defect.sourceRecordId);
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
                     const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
                     const transitions = srcRecord && srcConfig
-                      ? getAvailableStatusTransitionsForRecord(srcConfig, srcRecord.status)
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
                       : [];
                     return (
                       <DefectCard
@@ -2745,7 +4049,7 @@ function App() {
                         onDelete={handleDeleteDefect}
                         isHistory={true}
                         statusTransitions={transitions.length > 0 ? transitions : undefined}
-                        onStatusTransition={handleStatusTransitionForRecord}
+                        onStatusTransition={handleStatusTransition}
                         sourceRecordId={srcRecord?.id}
                         showLifecycleActions={false}
                         getTimeStatus={getTimeStatus}
@@ -2766,11 +4070,11 @@ function App() {
             <div>
               <p>培训讲评</p>
               <h2>检查讲评视图</h2>
-              <p className="workflow-info">{getRoleDescriptionFromConfig(activeRole)}</p>
+              <p className="workflow-info">{getRoleDescription(activeRole)}</p>
             </div>
             <div className="review-actions">
               <button className="review-summary-btn">
-                讲评进度 {enhancedFilteredRecords.filter(r => trainingComments[r.id]?.comment?.trim()).length}/{reviewStatsValue.total}
+                讲评进度 {filteredRecords.filter(r => trainingComments[r.id]?.comment?.trim()).length}/{reviewStats.total}
               </button>
             </div>
           </div>
@@ -2778,52 +4082,49 @@ function App() {
           <div className="review-metrics">
             <div className="review-metric">
               <span>记录总数</span>
-              <strong>{reviewStatsValue.total}</strong>
+              <strong>{reviewStats.total}</strong>
             </div>
             <div className="review-metric review-metric-ok">
               <span>正常</span>
-              <strong>{reviewStatsValue.normal}</strong>
+              <strong>{reviewStats.normal}</strong>
             </div>
             <div className="review-metric review-metric-watch">
               <span>待复核</span>
-              <strong>{reviewStatsValue.pending}</strong>
+              <strong>{reviewStats.pending}</strong>
             </div>
             <div className="review-metric review-metric-danger">
               <span>缺陷项</span>
-              <strong>{reviewStatsValue.defect}</strong>
+              <strong>{reviewStats.defect}</strong>
             </div>
             <div className="review-metric review-metric-watch">
               <span>待讲评</span>
-              <strong>{trainingCommentStatsValue.pendingReview}</strong>
+              <strong>{trainingCommentStats.pendingReview}</strong>
             </div>
             <div className="review-metric review-metric-warn">
               <span>需复训</span>
-              <strong>{trainingCommentStatsValue.needRetraining}</strong>
+              <strong>{trainingCommentStats.needRetraining}</strong>
             </div>
             <div className="review-metric review-metric-primary">
               <span>已闭环</span>
-              <strong>{trainingCommentStatsValue.closed}</strong>
+              <strong>{trainingCommentStats.closed}</strong>
             </div>
           </div>
 
           <div className="review-list">
-            {enhancedFilteredRecords.length === 0 ? (
+            {filteredRecords.length === 0 ? (
               <div className="empty-state">
                 <p>暂无符合筛选条件的记录</p>
               </div>
             ) : (
-              enhancedFilteredRecords.map((record, index) => {
+              filteredRecords.map((record, index) => {
                 const recordHistory = statusHistory[record.id] || [];
                 const commentData = trainingComments[record.id];
                 const releaseReview = releaseReviews[record.id];
                 const recordConfig = findRecordWorkflowConfig(record);
                 const isFallbackConfig = (recordConfig as any)?._fallback;
                 const availableTransitions = recordConfig
-                  ? getAvailableStatusTransitionsForRecord(recordConfig, record.status)
+                  ? getAvailableStatusTransitions(recordConfig, record.status, activeRole)
                   : [];
-                const hasDefect = canCreateDefectFromConfig(recordConfig, activeRole, record.status);
-                const defectExists = !!Object.values(defects).find(d => d.sourceRecordId === record.id);
-                const isExpanded = activeHistoryRecordId === record.id;
                 return (
                   <article key={record.id} className={`review-card ${isFallbackConfig ? "fallback-config-card" : ""}`}>
                     <div className="review-card-header">
@@ -2924,39 +4225,22 @@ function App() {
                               <button
                                 key={`${transition.from}-${transition.to}`}
                                 className={`status-transition-btn ${transition.colorClass || ""}`}
-                                onClick={() => handleStatusTransitionForRecord(record.id, tIdx)}
+                                onClick={() => handleStatusTransition(record.id, tIdx)}
                               >
                                 {transition.label}
                               </button>
                             ))}
-                            {activeRole !== "培训教员" && (
-                              <button
-                                className="save-as-template-btn"
-                                onClick={() => openSaveAsTemplateModal(record)}
-                              >
-                                保存为模板
-                              </button>
-                            )}
-                            {hasDefect && (
-                              <button
-                                className="generate-defect-btn"
-                                onClick={() => handleGenerateDefectFromRecord(record)}
-                                disabled={defectExists}
-                              >
-                                {defectExists ? "已加入清单" : "生成缺陷"}
-                              </button>
-                            )}
                           </div>
                         </div>
                       )}
 
-                      <div className="training-comment-section">
+                      <div className="comment-section">
                         <div className="section-label">
                           培训讲评备注
                           {(() => {
                             const status = commentData?.status || "待讲评";
                             return (
-                              <span className={`comment-status-badge comment-status-${status}`}>
+                              <span className={`training-status-badge training-status-${status}`}>
                                 {status}
                               </span>
                             );
@@ -2970,34 +4254,26 @@ function App() {
                           )}
                         </div>
                         <textarea
-                          className="training-comment-textarea"
+                          className="comment-textarea"
                           placeholder="请输入培训讲评意见，例如：针对该缺陷的处置要点、常见问题、注意事项、改进建议..."
+                          rows={4}
                           value={commentData?.comment || ""}
                           onChange={e => handleTrainingCommentChange(record.id, e.target.value)}
-                          rows={4}
                         />
-                        <div className="comment-status-actions">
-                          <span className="status-label">讲评状态：</span>
-                          <div className="status-options">
-                            <button
-                              className={(!commentData?.status || commentData.status === "待讲评") ? "status-option-active" : ""}
-                              onClick={() => handleTrainingCommentStatusChange(record.id, "待讲评")}
-                            >
-                              待讲评
-                            </button>
-                            <button
-                              className={commentData?.status === "需复训" ? "status-option-active" : ""}
-                              onClick={() => handleTrainingCommentStatusChange(record.id, "需复训")}
-                            >
-                              需复训
-                            </button>
-                            <button
-                              className={commentData?.status === "已闭环" ? "status-option-active" : ""}
-                              onClick={() => handleTrainingCommentStatusChange(record.id, "已闭环")}
-                            >
-                              已闭环
-                            </button>
-                          </div>
+                        <div className="training-status-selector">
+                          <span className="status-selector-label">标记状态：</span>
+                          {(["待讲评", "需复训", "已闭环"] as TrainingCommentStatus[]).map(status => {
+                            const currentStatus = commentData?.status || "待讲评";
+                            return (
+                              <button
+                                key={status}
+                                className={`training-status-btn training-status-btn-${status} ${currentStatus === status ? "active" : ""}`}
+                                onClick={() => handleTrainingCommentStatusChange(record.id, status)}
+                              >
+                                {status}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>
@@ -3008,19 +4284,12 @@ function App() {
           </div>
         </section>
       ) : (
-        <section className="engineer-panel">
-          <div className="section-heading">
-            <div>
-              <p>维修工程师工作台</p>
-              <h2>缺陷处理与记录</h2>
-              <p className="workflow-info">{getRoleDescriptionFromConfig(activeRole)}</p>
-            </div>
-          </div>
-
-          <div className="engineer-defect-section">
+        <>
+          <section className="defect-panel">
             <div className="section-heading">
               <div>
-                <h3>我的缺陷任务</h3>
+                <p>维修缺陷闭环</p>
+                <h2>缺陷处理工作台</h2>
               </div>
               <div className="defect-tabs">
                 <button
@@ -3038,170 +4307,270 @@ function App() {
               </div>
             </div>
 
+            <div className="defect-metrics">
+              <div className="defect-metric">
+                <span>缺陷总数</span>
+                <strong>{defectStats.total}</strong>
+              </div>
+              <div className="defect-metric defect-metric-pending">
+                <span>待处理</span>
+                <strong>{defectStats.pending}</strong>
+              </div>
+              <div className="defect-metric defect-metric-processing">
+                <span>处理中</span>
+                <strong>{defectStats.processing}</strong>
+              </div>
+              <div className="defect-metric defect-metric-soon">
+                <span>即将逾期</span>
+                <strong>{defectStats.soonOverdue}</strong>
+              </div>
+              <div className="defect-metric defect-metric-overdue">
+                <span>已逾期</span>
+                <strong>{defectStats.overdue}</strong>
+              </div>
+              <div className="defect-metric defect-metric-completed">
+                <span>已完成</span>
+                <strong>{defectStats.completed}</strong>
+              </div>
+              <div className="defect-metric defect-metric-rejected">
+                <span>已退回</span>
+                <strong>{defectStats.rejected}</strong>
+              </div>
+            </div>
+
             {activeDefectTab === "pending" ? (
-              <div className="defect-list compact">
+              <div className="defect-list">
                 {groupedDefects.pending.length === 0 ? (
-                  <div className="empty-state small">
-                    <p>暂无待处理缺陷</p>
+                  <div className="empty-state">
+                    <p>暂无待处理缺陷。请在下方"近期记录"中点击缺陷项的"生成缺陷"按钮，将缺陷加入待处理清单。</p>
                   </div>
                 ) : (
-                  groupedDefects.pending.slice(0, 5).map((defect, index) => {
-                    const srcRecord = getDefectSourceRecordLocal(defect.sourceRecordId);
+                  groupedDefects.pending.map((defect, index) => {
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
                     const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
                     const transitions = srcRecord && srcConfig
-                      ? getAvailableStatusTransitionsForRecord(srcConfig, srcRecord.status)
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
                       : [];
                     return (
-                      <DefectCard
-                        key={defect.id}
-                        defect={defect}
-                        index={index}
-                        formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
-                        sourceRecord={srcRecord}
-                        onFormChange={handleDefectFormChange}
-                        onStartProcessing={handleStartProcessing}
-                        onComplete={handleCompleteDefect}
-                        onReject={handleRejectDefect}
-                        onReopen={handleReopenDefect}
-                        onDelete={handleDeleteDefect}
-                        isHistory={false}
-                        statusTransitions={transitions.length > 0 ? transitions : undefined}
-                        onStatusTransition={handleStatusTransitionForRecord}
-                        sourceRecordId={srcRecord?.id}
-                        showLifecycleActions={true}
-                        getTimeStatus={getTimeStatus}
-                        getPriorityText={(p) => PRIORITY_TEXT[p]}
-                        getPriorityBadgeClass={getPriorityBadgeClass}
-                        onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
-                      />
+                    <DefectCard
+                      key={defect.id}
+                      defect={defect}
+                      index={index}
+                      formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
+                      sourceRecord={srcRecord}
+                      onFormChange={handleDefectFormChange}
+                      onStartProcessing={handleStartProcessing}
+                      onComplete={handleCompleteDefect}
+                      onReject={handleRejectDefect}
+                      onReopen={handleReopenDefect}
+                      onDelete={handleDeleteDefect}
+                      isHistory={false}
+                      statusTransitions={transitions.length > 0 ? transitions : undefined}
+                      onStatusTransition={handleStatusTransition}
+                      sourceRecordId={srcRecord?.id}
+                      getTimeStatus={getTimeStatus}
+                      getPriorityText={(p) => PRIORITY_TEXT[p]}
+                      getPriorityBadgeClass={getPriorityBadgeClass}
+                      onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
+                    />
                     );
                   })
                 )}
               </div>
             ) : (
-              <div className="defect-list compact">
+              <div className="defect-list">
                 {groupedDefects.history.length === 0 ? (
-                  <div className="empty-state small">
-                    <p>暂无历史缺陷记录</p>
+                  <div className="empty-state">
+                    <p>暂无历史缺陷记录。</p>
                   </div>
                 ) : (
-                  groupedDefects.history.slice(0, 5).map((defect, index) => {
-                    const srcRecord = getDefectSourceRecordLocal(defect.sourceRecordId);
+                  groupedDefects.history.map((defect, index) => {
+                    const srcRecord = getDefectSourceRecord(defect.sourceRecordId);
                     const srcConfig = srcRecord ? findRecordWorkflowConfig(srcRecord) : undefined;
                     const transitions = srcRecord && srcConfig
-                      ? getAvailableStatusTransitionsForRecord(srcConfig, srcRecord.status)
+                      ? getAvailableStatusTransitions(srcConfig, srcRecord.status, activeRole)
                       : [];
                     return (
-                      <DefectCard
-                        key={defect.id}
-                        defect={defect}
-                        index={index}
-                        formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
-                        sourceRecord={srcRecord}
-                        onFormChange={handleDefectFormChange}
-                        onStartProcessing={handleStartProcessing}
-                        onComplete={handleCompleteDefect}
-                        onReject={handleRejectDefect}
-                        onReopen={handleReopenDefect}
-                        onDelete={handleDeleteDefect}
-                        isHistory={true}
-                        statusTransitions={transitions.length > 0 ? transitions : undefined}
-                        onStatusTransition={handleStatusTransitionForRecord}
-                        sourceRecordId={srcRecord?.id}
-                        showLifecycleActions={true}
-                        getTimeStatus={getTimeStatus}
-                        getPriorityText={(p) => PRIORITY_TEXT[p]}
-                        getPriorityBadgeClass={getPriorityBadgeClass}
-                        onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
-                      />
+                    <DefectCard
+                      key={defect.id}
+                      defect={defect}
+                      index={index}
+                      formValues={defectFormValues[defect.id] || getDefaultDefectFormValues(defect)}
+                      sourceRecord={srcRecord}
+                      onFormChange={handleDefectFormChange}
+                      onStartProcessing={handleStartProcessing}
+                      onComplete={handleCompleteDefect}
+                      onReject={handleRejectDefect}
+                      onReopen={handleReopenDefect}
+                      onDelete={handleDeleteDefect}
+                      isHistory={true}
+                      statusTransitions={transitions.length > 0 ? transitions : undefined}
+                      onStatusTransition={handleStatusTransition}
+                      sourceRecordId={srcRecord?.id}
+                      getTimeStatus={getTimeStatus}
+                      getPriorityText={(p) => PRIORITY_TEXT[p]}
+                      getPriorityBadgeClass={getPriorityBadgeClass}
+                      onPriorityOrTimeSave={handleDefectPriorityOrTimeSave}
+                    />
                     );
                   })
                 )}
               </div>
             )}
-          </div>
+          </section>
 
-          <div className="recent-records-section">
+          <section className="records panel">
             <div className="section-heading">
               <div>
-                <h3>近期检查记录</h3>
+                <p>检查记录</p>
+                <h2>近期记录</h2>
               </div>
+              <button onClick={openExportPreview}>导出摘要</button>
             </div>
-            <div className="recent-records-list">
-              {reviewRecords.length === 0 ? (
-                <div className="empty-state small">
-                  <p>暂无检查记录</p>
+            <div className="record-list">
+              {filteredRecords.length === 0 ? (
+                <div className="empty-state">
+                  <p>暂无记录，点击"新增记录"创建第一条检查记录</p>
                 </div>
               ) : (
-                reviewRecords.slice(0, 5).map((record, index) => {
-                  const recordHistory = statusHistory[record.id] || [];
-                  const recordConfig = findRecordWorkflowConfig(record);
-                  const isFallbackConfig = (recordConfig as any)?._fallback;
-                  const availableTransitions = recordConfig
-                    ? getAvailableStatusTransitionsForRecord(recordConfig, record.status)
-                    : [];
-                  return (
-                    <article key={record.id} className={`recent-record-card ${isFallbackConfig ? "fallback-config-card" : ""}`}>
-                      <div className="recent-record-header">
-                        <div className="recent-record-index">{String(index + 1).padStart(2, "0")}</div>
-                        <div className="recent-record-title">
-                          <div className="recent-record-top">
-                            <h4>{record.aircraftType}</h4>
+                filteredRecords.map((record, index) => (
+                  (() => {
+                    const recordConfig = findRecordWorkflowConfig(record);
+                    const displayFields = getRecordDisplayFields(recordConfig, record)
+                      .filter(field => field.label !== "机型");
+                    const hasDefect = canCreateDefect(recordConfig, activeRole, record.status);
+                    const defectExists = !!Object.values(defects).find(d => d.sourceRecordId === record.id);
+                    const recordHistory = statusHistory[record.id] || [];
+                    const isExpanded = activeHistoryRecordId === record.id;
+                    const releaseReview = releaseReviews[record.id];
+                    const availableTransitions = recordConfig
+                      ? getAvailableStatusTransitions(recordConfig, record.status, activeRole)
+                      : [];
+                    return (
+                      <article key={record.id} className="record-card">
+                        <div className={`record-index ${hasDefect ? "record-index-defect" : ""}`}>
+                          {String(index + 1).padStart(2, "0")}
+                        </div>
+                        <div className="record-content">
+                          <div className="record-header-row">
+                            <h3>{record.aircraftType}</h3>
                             <span className={`status-badge ${getStatusBadgeClass(record.status)}`}>
                               {record.status}
                             </span>
-                            {isFallbackConfig && (
-                              <span className="fallback-config-badge" title="原始配置已删除或修改，当前使用兼容模式展示">
-                                ⚠️ 兼容模式
-                              </span>
+                            <span className={`training-status-badge training-status-${trainingComments[record.id]?.status || "待讲评"}`}>
+                              {trainingComments[record.id]?.status || "待讲评"}
+                            </span>
+                            <button
+                              className="history-btn history-btn-sm"
+                              onClick={() => setActiveHistoryRecordId(
+                                activeHistoryRecordId === record.id ? null : record.id
+                              )}
+                            >
+                              📋 ({recordHistory.length})
+                            </button>
+                          </div>
+                          <p>
+                            {displayFields.map(field => `${field.label}：${field.value}`).join(" · ")}
+                          </p>
+                        </div>
+                        <div className="record-actions">
+                          {availableTransitions.map((transition, tIdx) => (
+                            <button
+                              key={`${transition.from}-${transition.to}`}
+                              className={`status-transition-btn ${transition.colorClass || ""}`}
+                              onClick={() => handleStatusTransition(record.id, tIdx)}
+                            >
+                              {transition.label}
+                            </button>
+                          ))}
+                          {activeRole !== "培训教员" && (
+                            <button
+                              className="save-as-template-btn"
+                              onClick={() => openSaveAsTemplateModal(record)}
+                            >
+                              保存为模板
+                            </button>
+                          )}
+                          {hasDefect && (
+                            <button
+                              className="generate-defect-btn"
+                              onClick={() => handleGenerateDefectFromRecord(record)}
+                              disabled={defectExists}
+                            >
+                              {defectExists ? "已加入清单" : "生成缺陷"}
+                            </button>
+                          )}
+                        </div>
+                        {isExpanded && (
+                          <div className="record-expanded">
+                            {recordHistory.length > 0 && (
+                              <div className="history-timeline">
+                                <div className="section-label">状态变更历史</div>
+                                {recordHistory.map((item) => (
+                                  <div key={item.id} className="history-timeline-item">
+                                    <div className="history-dot"></div>
+                                    <div className="history-content">
+                                      <div className="history-header">
+                                        <span className="history-status-from">{item.fromStatus}</span>
+                                        <span className="history-arrow">→</span>
+                                        <span className="history-status-to">{item.toStatus}</span>
+                                        <span className="history-operator">{item.operatorRole}</span>
+                                        <span className="history-time">
+                                          {new Date(item.changedAt).toLocaleString("zh-CN", {
+                                            month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                                          })}
+                                        </span>
+                                      </div>
+                                      {item.remark && <div className="history-remark">{item.remark}</div>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             )}
-                          </div>
-                          <div className="recent-record-meta">
-                            <span className="meta-tag">{record.ataChapter}</span>
-                            <span className="meta-tag meta-tag-muted">{record.checkArea}</span>
-                            {record.checkItem && <span className="meta-tag meta-tag-muted">{record.checkItem}</span>}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="recent-record-body">
-                        <div className="defect-section">
-                          <div className="section-label">检查说明</div>
-                          <div className="defect-content">
-                            {record.defectDesc ? record.defectDesc : "无缺陷描述"}
-                          </div>
-                        </div>
-                        {availableTransitions.length > 0 && (
-                          <div className="status-transition-section">
-                            <div className="section-label">状态操作</div>
-                            <div className="status-transition-row">
-                              {availableTransitions.map((transition, tIdx) => (
-                                <button
-                                  key={`${transition.from}-${transition.to}`}
-                                  className={`status-transition-btn small ${transition.colorClass || ""}`}
-                                  onClick={() => handleStatusTransitionForRecord(record.id, tIdx)}
-                                >
-                                  {transition.label}
-                                </button>
-                              ))}
+                            {releaseReview && (
+                              <div className="release-review-section">
+                                <div className="section-label">
+                                  放行复核
+                                  <span className="reviewer-info">
+                                    {releaseReview.reviewer} · {new Date(releaseReview.reviewedAt).toLocaleString("zh-CN", {
+                                      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                                    })}
+                                  </span>
+                                </div>
+                                <div className={`review-result-display ${releaseReview.status}`}>
+                                  <strong>{releaseReview.status === "passed" ? "✅ 通过" : "❌ 驳回"}</strong>
+                                  {releaseReview.opinion && <p>{releaseReview.opinion}</p>}
+                                </div>
+                              </div>
+                            )}
+                            <div className="comment-section">
+                              <div className="section-label">
+                                培训讲评
+                                <span className={`training-status-badge training-status-${trainingComments[record.id]?.status || "待讲评"}`}>
+                                  {trainingComments[record.id]?.status || "待讲评"}
+                                </span>
+                                {trainingComments[record.id] && (
+                                  <span className="reviewer-info">
+                                    {trainingComments[record.id].trainer} · {new Date(trainingComments[record.id].updatedAt).toLocaleString("zh-CN", {
+                                      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+                                    })}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="comment-display">
+                                {trainingComments[record.id]?.comment || "暂无讲评内容"}
+                              </div>
                             </div>
                           </div>
                         )}
-                        {canCreateDefectFromConfig(recordConfig, activeRole, record.status) && (
-                          <button
-                            className="create-defect-btn"
-                            onClick={() => handleGenerateDefectFromRecord(record)}
-                          >
-                            ➕ 生成缺陷项
-                          </button>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })
+                      </article>
+                    );
+                  })()
+                ))
               )}
-            </div>
           </div>
         </section>
+        </>
       )}
 
       {isCreateDefectModalOpen && createDefectSourceRecord && (
@@ -3382,7 +4751,7 @@ function App() {
                           <input
                             type="checkbox"
                             checked={getPendingRecordsInDetail().length > 0 && getPendingRecordsInDetail().every(r => selectedRecordIds.has(r.id))}
-                            onChange={handleToggleSelectAllPendingInDetail}
+                            onChange={handleToggleSelectAllPending}
                           />
                           全选待复核 ({getPendingRecordsInDetail().length}条)
                         </label>
@@ -3403,7 +4772,7 @@ function App() {
                       <div className="batch-actions">
                         <button
                           className="batch-pass-btn"
-                          onClick={handleBatchReviewInDetail}
+                          onClick={handleBatchReview}
                           disabled={selectedRecordIds.size === 0}
                         >
                           批量通过 ({selectedRecordIds.size})
@@ -3499,7 +4868,7 @@ function App() {
                                 review={review}
                                 opinion={opinion}
                                 onOpinionChange={handleReleaseOpinionChange}
-                                onReview={handleReleaseReviewWithRecord}
+                                onReview={handleReleaseReview}
                                 recordType="defect"
                                 history={history}
                                 showHistory={showHistory}
@@ -3639,7 +5008,7 @@ function App() {
                       <div key={field} className="conflict-change-item">
                         <span className="conflict-field">{field}</span>
                         <span className="conflict-value-local">
-                          {JSON.stringify((diff as any).old)} → {JSON.stringify((diff as any).new)}
+                          {JSON.stringify(diff.old)} → {JSON.stringify(diff.new)}
                         </span>
                       </div>
                     ))}
@@ -3660,7 +5029,7 @@ function App() {
                       <div key={field} className="conflict-change-item">
                         <span className="conflict-field">{field}</span>
                         <span className="conflict-value-remote">
-                          {JSON.stringify((diff as any).old)} → {JSON.stringify((diff as any).new)}
+                          {JSON.stringify(diff.old)} → {JSON.stringify(diff.new)}
                         </span>
                       </div>
                     ))}

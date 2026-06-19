@@ -632,10 +632,10 @@ export function getGlobalMetrics() {
 
 export function getGlobalFilters() {
   return [
-    { key: "airframe", label: "机体", type: "area" as const },
-    { key: "powerplant", label: "动力装置", type: "area" as const },
-    { key: "avionics", label: "航电", type: "area" as const },
-    { key: "landingGear", label: "起落架", type: "area" as const }
+    { key: "airframe", label: "机体", type: "area" as const, matchField: "checkArea" },
+    { key: "powerplant", label: "动力装置", type: "area" as const, matchField: "checkArea" },
+    { key: "avionics", label: "航电", type: "area" as const, matchField: "checkArea" },
+    { key: "landingGear", label: "起落架", type: "area" as const, matchField: "checkArea" }
   ];
 }
 
