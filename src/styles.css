@@ -4344,3 +4344,248 @@ textarea {
 .status-transition-item > .tag-remove-btn:hover {
   background: #fee2e2;
 }
+
+.conflict-modal-content {
+  max-width: 800px;
+  width: calc(100% - 40px);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.conflict-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-radius: 12px 12px 0 0;
+}
+
+.conflict-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.conflict-modal-title h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #92400e;
+}
+
+.conflict-icon {
+  font-size: 28px;
+}
+
+.conflict-modal-body {
+  padding: 24px;
+}
+
+.conflict-info-bar {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.conflict-entity-type {
+  padding: 4px 12px;
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.conflict-entity-id {
+  padding: 4px 12px;
+  background: #f1f5f9;
+  color: #475569;
+  border-radius: 20px;
+  font-size: 12px;
+  font-family: monospace;
+}
+
+.conflict-description {
+  margin: 16px 0 24px;
+  color: #374151;
+  font-size: 15px;
+}
+
+.conflict-changes-container {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.conflict-changes-column {
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.conflict-changes-column:first-child {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.conflict-changes-column:last-child {
+  border-color: #f97316;
+  background: #fff7ed;
+}
+
+.conflict-changes-column h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: #1e293b;
+}
+
+.conflict-version-time {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.conflict-changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.conflict-change-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.conflict-field {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.conflict-value-local {
+  font-size: 13px;
+  color: #1d4ed8;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.conflict-value-remote {
+  font-size: 13px;
+  color: #c2410c;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.conflict-changes-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conflict-divider-text {
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.conflict-pending-count {
+  padding: 12px;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  text-align: center;
+  color: #92400e;
+  font-size: 14px;
+}
+
+.conflict-modal-footer {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  padding: 20px 24px;
+  border-top: 1px solid var(--border);
+  background: #f8fafc;
+  border-radius: 0 0 12px 12px;
+}
+
+.conflict-btn-keep-local {
+  background: #eff6ff;
+  border: 1px solid #3b82f6;
+  color: #1d4ed8;
+  font-weight: 500;
+}
+
+.conflict-btn-keep-local:hover {
+  background: #dbeafe;
+}
+
+.conflict-btn-accept-remote {
+  background: #f97316 !important;
+  border-color: #f97316 !important;
+  color: #fff !important;
+  font-weight: 500;
+}
+
+.conflict-btn-accept-remote:hover {
+  background: #ea580c !important;
+}
+
+.data-refresh-indicator {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #1d4ed8;
+  color: #fff;
+  border-radius: 8px;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3);
+  z-index: 1000;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.refresh-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

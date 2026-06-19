@@ -2,6 +2,20 @@ import {
   enqueueOperation,
   cacheStaticAssets
 } from "./offline";
+import {
+  addVersionFields,
+  broadcastEntityUpdate,
+  broadcastEntityDelete,
+  generateOperationId,
+  isOperationProcessed,
+  markOperationProcessed,
+  VersionedEntity,
+  VersionedRecord,
+  VersionedDefect,
+  VersionedTrainingComment,
+  VersionedStatusHistory,
+  EntityType
+} from "./sync";
 
 export interface CheckTemplate {
   id: string;
@@ -232,7 +246,7 @@ function openDB(): Promise<IDBDatabase> {
         defectStore.createIndex("priority", "priority", { unique: false });
         defectStore.createIndex("expectedCompletionTime", "expectedCompletionTime", { unique: false });
       } else {
-        const defectStore = event.target!.transaction!.objectStore(STORE_DEFECTS);
+        const defectStore = (event.target as IDBOpenDBRequest).transaction!.objectStore(STORE_DEFECTS);
         if (!defectStore.indexNames.contains("priority")) {
           defectStore.createIndex("priority", "priority", { unique: false });
         }
@@ -270,7 +284,7 @@ function openDB(): Promise<IDBDatabase> {
         commentStore.createIndex("createdAt", "createdAt", { unique: false });
         commentStore.createIndex("status", "status", { unique: false });
       } else {
-        const commentStore = event.target!.transaction!.objectStore(STORE_TRAINING_COMMENTS);
+        const commentStore = (event.target as IDBOpenDBRequest).transaction!.objectStore(STORE_TRAINING_COMMENTS);
         if (!commentStore.indexNames.contains("status")) {
           commentStore.createIndex("status", "status", { unique: false });
         }
@@ -405,38 +419,67 @@ export async function getAllRecords(): Promise<ReviewRecord[]> {
   });
 }
 
-export async function addRecord(record: ReviewRecord): Promise<void> {
+export async function addRecord(record: ReviewRecord, operationId?: string): Promise<VersionedRecord> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return record as VersionedRecord;
+  }
+  
+  const versioned = addVersionFields(record, 0, opId);
+  
   return withDB(STORE_RECORDS, "readwrite", (store) => {
-    return new Promise<void>((resolve, reject) => {
-      const request = store.put(record);
+    return new Promise<VersionedRecord>((resolve, reject) => {
+      const request = store.put(versioned);
       request.onsuccess = () => {
-        enqueueOperation("addRecord", record);
-        resolve();
+        enqueueOperation("addRecord", versioned);
+        markOperationProcessed(opId);
+        broadcastEntityUpdate("record", versioned, opId);
+        resolve(versioned);
       };
       request.onerror = () => reject(request.error);
     });
   });
 }
 
-export async function updateRecord(record: ReviewRecord): Promise<void> {
+export async function updateRecord(record: ReviewRecord, operationId?: string): Promise<VersionedRecord> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return record as VersionedRecord;
+  }
+  
+  const existing = record as unknown as VersionedEntity;
+  const versioned = addVersionFields(record, existing._version, opId);
+  
   return withDB(STORE_RECORDS, "readwrite", (store) => {
-    return new Promise<void>((resolve, reject) => {
-      const request = store.put(record);
+    return new Promise<VersionedRecord>((resolve, reject) => {
+      const request = store.put(versioned);
       request.onsuccess = () => {
-        enqueueOperation("updateRecord", record);
-        resolve();
+        enqueueOperation("updateRecord", versioned);
+        markOperationProcessed(opId);
+        broadcastEntityUpdate("record", versioned, opId);
+        resolve(versioned);
       };
       request.onerror = () => reject(request.error);
     });
   });
 }
 
-export async function deleteRecord(id: string): Promise<void> {
+export async function deleteRecord(id: string, operationId?: string): Promise<void> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return;
+  }
+  
   return withDB(STORE_RECORDS, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.delete(id);
       request.onsuccess = () => {
         enqueueOperation("deleteRecord", { id });
+        markOperationProcessed(opId);
+        broadcastEntityDelete("record", id, opId);
         resolve();
       };
       request.onerror = () => reject(request.error);
@@ -519,38 +562,67 @@ export async function getAllDefects(): Promise<DefectState> {
   });
 }
 
-export async function addDefect(defect: DefectItem): Promise<void> {
+export async function addDefect(defect: DefectItem, operationId?: string): Promise<VersionedDefect> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return defect as VersionedDefect;
+  }
+  
+  const versioned = addVersionFields(defect, 0, opId);
+  
   return withDB(STORE_DEFECTS, "readwrite", (store) => {
-    return new Promise<void>((resolve, reject) => {
-      const request = store.put(defect);
+    return new Promise<VersionedDefect>((resolve, reject) => {
+      const request = store.put(versioned);
       request.onsuccess = () => {
-        enqueueOperation("addDefect", defect);
-        resolve();
+        enqueueOperation("addDefect", versioned);
+        markOperationProcessed(opId);
+        broadcastEntityUpdate("defect", versioned, opId);
+        resolve(versioned);
       };
       request.onerror = () => reject(request.error);
     });
   });
 }
 
-export async function updateDefect(defect: DefectItem): Promise<void> {
+export async function updateDefect(defect: DefectItem, operationId?: string): Promise<VersionedDefect> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return defect as VersionedDefect;
+  }
+  
+  const existing = defect as unknown as VersionedEntity;
+  const versioned = addVersionFields(defect, existing._version, opId);
+  
   return withDB(STORE_DEFECTS, "readwrite", (store) => {
-    return new Promise<void>((resolve, reject) => {
-      const request = store.put(defect);
+    return new Promise<VersionedDefect>((resolve, reject) => {
+      const request = store.put(versioned);
       request.onsuccess = () => {
-        enqueueOperation("updateDefect", defect);
-        resolve();
+        enqueueOperation("updateDefect", versioned);
+        markOperationProcessed(opId);
+        broadcastEntityUpdate("defect", versioned, opId);
+        resolve(versioned);
       };
       request.onerror = () => reject(request.error);
     });
   });
 }
 
-export async function deleteDefect(id: string): Promise<void> {
+export async function deleteDefect(id: string, operationId?: string): Promise<void> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return;
+  }
+  
   return withDB(STORE_DEFECTS, "readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const request = store.delete(id);
       request.onsuccess = () => {
         enqueueOperation("deleteDefect", { id });
+        markOperationProcessed(opId);
+        broadcastEntityDelete("defect", id, opId);
         resolve();
       };
       request.onerror = () => reject(request.error);
@@ -560,8 +632,31 @@ export async function deleteDefect(id: string): Promise<void> {
 
 export async function createDefectFromRecord(
   record: ReviewRecord,
-  options?: { priority?: DefectPriority; expectedCompletionTime?: number }
+  options?: { priority?: DefectPriority; expectedCompletionTime?: number },
+  operationId?: string
 ): Promise<DefectItem> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    const existingDefect: DefectItem = {
+      id: `defect-dedup-${opId}`,
+      sourceRecordId: record.id,
+      aircraftType: record.aircraftType,
+      ataChapter: record.ataChapter,
+      checkArea: record.checkArea,
+      checkItem: record.checkItem,
+      defectDesc: record.defectDesc,
+      handlingOpinion: "",
+      assignedSigner: "",
+      status: "pending",
+      priority: options?.priority || "medium",
+      expectedCompletionTime: options?.expectedCompletionTime,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    return existingDefect;
+  }
+  
   const now = Date.now();
   const defect: DefectItem = {
     id: `defect-${now}`,
@@ -579,18 +674,36 @@ export async function createDefectFromRecord(
     createdAt: now,
     updatedAt: now
   };
-  await addDefect(defect);
-  enqueueOperation("createDefectFromRecord", defect);
-  return defect;
+  const versioned = await addDefect(defect, opId);
+  enqueueOperation("createDefectFromRecord", versioned);
+  return versioned;
 }
 
-export async function addStatusHistory(history: StatusHistoryItem): Promise<void> {
+export async function addStatusHistory(history: StatusHistoryItem, operationId?: string): Promise<VersionedStatusHistory> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return history as VersionedStatusHistory;
+  }
+  
+  const dedupCheck = `${history.recordId}-${history.fromStatus}-${history.toStatus}-${history.changedAt}`;
+  const historyHash = btoa(dedupCheck);
+  
+  if (isOperationProcessed(historyHash)) {
+    return history as VersionedStatusHistory;
+  }
+  
+  const versioned = addVersionFields(history, 0, opId);
+  
   return withDB(STORE_STATUS_HISTORY, "readwrite", (store) => {
-    return new Promise<void>((resolve, reject) => {
-      const request = store.put(history);
+    return new Promise<VersionedStatusHistory>((resolve, reject) => {
+      const request = store.put(versioned);
       request.onsuccess = () => {
-        enqueueOperation("addStatusHistory", history);
-        resolve();
+        enqueueOperation("addStatusHistory", versioned);
+        markOperationProcessed(opId);
+        markOperationProcessed(historyHash);
+        broadcastEntityUpdate("statusHistory", versioned, opId);
+        resolve(versioned);
       };
       request.onerror = () => reject(request.error);
     });
@@ -633,13 +746,24 @@ export async function getAllStatusHistory(): Promise<StatusHistoryState> {
   });
 }
 
-export async function saveTrainingComment(comment: TrainingComment): Promise<void> {
+export async function saveTrainingComment(comment: TrainingComment, operationId?: string): Promise<VersionedTrainingComment> {
+  const opId = operationId || generateOperationId();
+  
+  if (operationId && isOperationProcessed(operationId)) {
+    return comment as VersionedTrainingComment;
+  }
+  
+  const existing = comment as unknown as VersionedEntity;
+  const versioned = addVersionFields(comment, existing._version, opId);
+  
   return withDB(STORE_TRAINING_COMMENTS, "readwrite", (store) => {
-    return new Promise<void>((resolve, reject) => {
-      const request = store.put(comment);
+    return new Promise<VersionedTrainingComment>((resolve, reject) => {
+      const request = store.put(versioned);
       request.onsuccess = () => {
-        enqueueOperation("saveTrainingComment", comment);
-        resolve();
+        enqueueOperation("saveTrainingComment", versioned);
+        markOperationProcessed(opId);
+        broadcastEntityUpdate("trainingComment", versioned, opId);
+        resolve(versioned);
       };
       request.onerror = () => reject(request.error);
     });

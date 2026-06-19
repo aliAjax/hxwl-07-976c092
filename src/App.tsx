@@ -101,6 +101,22 @@ import {
   updateServiceWorker,
   activateWaitingWorker
 } from "./offline";
+import {
+  initSync,
+  subscribeEntityUpdates,
+  subscribeConflicts,
+  subscribeRefresh,
+  detectConflict,
+  broadcastConflict,
+  getEntityTypeLabel,
+  ConflictInfo,
+  SyncMessage,
+  VersionedEntity,
+  VersionedRecord,
+  VersionedDefect,
+  VersionedTrainingComment,
+  markOperationProcessed
+} from "./sync";
 
 type UserRole = "维修工程师" | "放行人员" | "培训教员";
 
@@ -821,6 +837,10 @@ function App() {
   const prevNetworkRef = useRef<NetworkStatus>(navigator.onLine ? "online" : "offline");
   const toastTimerRef = useRef<number | null>(null);
   const offlineToastTimerRef = useRef<number | null>(null);
+  const [conflicts, setConflicts] = useState<ConflictInfo[]>([]);
+  const [showConflictModal, setShowConflictModal] = useState(false);
+  const [selectedConflict, setSelectedConflict] = useState<ConflictInfo | null>(null);
+  const [dataRefreshIndicator, setDataRefreshIndicator] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -846,6 +866,8 @@ function App() {
     loadData();
 
     const cleanupNetwork = initNetworkMonitoring();
+    const cleanupSync = initSync();
+    
     const unsubscribeNetwork = subscribeNetworkStatus((status) => {
       const prev = prevNetworkRef.current;
       prevNetworkRef.current = status;
@@ -866,14 +888,26 @@ function App() {
     const unsubscribeSWStatus = subscribeSWStatus((status) => {
       setSwStatus(status);
     });
+    
+    const unsubscribeEntityUpdates = subscribeEntityUpdates(handleEntityUpdate);
+    const unsubscribeConflicts = subscribeConflicts(handleIncomingConflict);
+    const unsubscribeRefresh = subscribeRefresh(() => {
+      setDataRefreshIndicator(true);
+      refreshData().then(() => setDataRefreshIndicator(false));
+    });
+    
     getCacheInfo();
 
     return () => {
       cleanupNetwork();
+      cleanupSync();
       unsubscribeNetwork();
       unsubscribeSyncQueue();
       unsubscribeSyncStatus();
       unsubscribeSWStatus();
+      unsubscribeEntityUpdates();
+      unsubscribeConflicts();
+      unsubscribeRefresh();
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
   }, []);
@@ -905,6 +939,144 @@ function App() {
       setTrainingComments(tc);
     } catch (error) {
       console.error("Failed to refresh data:", error);
+    }
+  };
+
+  const handleEntityUpdate = async (message: SyncMessage) => {
+    if (message.operationId) {
+      markOperationProcessed(message.operationId);
+    }
+
+    if (message.type === "ENTITY_DELETED") {
+      if (message.entityType === "record") {
+        setReviewRecords(prev => prev.filter(r => r.id !== message.entityId));
+      } else if (message.entityType === "defect" && message.entityId) {
+        setDefects(prev => {
+          const next = { ...prev };
+          delete next[message.entityId!];
+          return next;
+        });
+      }
+      return;
+    }
+
+    if (!message.entity || !message.entityType) return;
+
+    const { entityType, entity } = message;
+    const remoteEntity = entity as VersionedEntity;
+
+    if (entityType === "record") {
+      const localRecord = reviewRecords.find(r => r.id === entity.id);
+      if (localRecord) {
+        const localVersioned = localRecord as unknown as VersionedEntity;
+        const conflict = detectConflict(localVersioned, remoteEntity);
+        if (conflict) {
+          handleConflictDetected(conflict);
+          return;
+        }
+      }
+      setReviewRecords(prev => {
+        const idx = prev.findIndex(r => r.id === entity.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = entity;
+          return next;
+        }
+        return [...prev, entity];
+      });
+    } else if (entityType === "defect") {
+      const localDefect = defects[entity.id];
+      if (localDefect) {
+        const localVersioned = localDefect as unknown as VersionedEntity;
+        const conflict = detectConflict(localVersioned, remoteEntity);
+        if (conflict) {
+          handleConflictDetected(conflict);
+          return;
+        }
+      }
+      setDefects(prev => ({ ...prev, [entity.id]: entity }));
+    } else if (entityType === "trainingComment") {
+      const localComment = trainingComments[entity.recordId];
+      if (localComment) {
+        const localVersioned = localComment as unknown as VersionedEntity;
+        const conflict = detectConflict(localVersioned, remoteEntity);
+        if (conflict) {
+          handleConflictDetected(conflict);
+          return;
+        }
+      }
+      setTrainingComments(prev => ({ ...prev, [entity.recordId]: entity }));
+    } else if (entityType === "statusHistory") {
+      await refreshData();
+    }
+  };
+
+  const handleIncomingConflict = (conflict: ConflictInfo) => {
+    setConflicts(prev => {
+      const exists = prev.some(c => 
+        c.entityType === conflict.entityType && 
+        c.entityId === conflict.entityId &&
+        !c.resolved
+      );
+      if (exists) return prev;
+      return [...prev, conflict];
+    });
+    setShowConflictModal(true);
+    setSelectedConflict(conflict);
+  };
+
+  const handleConflictDetected = (conflict: ConflictInfo) => {
+    broadcastConflict(conflict);
+    handleIncomingConflict(conflict);
+  };
+
+  const resolveConflict = async (conflict: ConflictInfo, resolution: "keepLocal" | "acceptRemote") => {
+    conflict.resolved = true;
+    conflict.resolution = resolution;
+
+    if (resolution === "acceptRemote") {
+      if (conflict.entityType === "record") {
+        const remoteRecord = conflict.remoteVersion as VersionedRecord;
+        await updateRecord(remoteRecord);
+        setReviewRecords(prev => prev.map(r => r.id === conflict.entityId ? remoteRecord : r));
+      } else if (conflict.entityType === "defect") {
+        const remoteDefect = conflict.remoteVersion as unknown as DefectItem;
+        await updateDefect(remoteDefect);
+        setDefects(prev => ({ ...prev, [conflict.entityId]: remoteDefect }));
+      } else if (conflict.entityType === "trainingComment") {
+        const remoteComment = conflict.remoteVersion as unknown as TrainingComment;
+        await saveTrainingComment(remoteComment);
+        setTrainingComments(prev => ({ ...prev, [remoteComment.recordId]: remoteComment }));
+      }
+    } else {
+      if (conflict.entityType === "record") {
+        const localRecord = conflict.localVersion as VersionedRecord;
+        await updateRecord(localRecord);
+      } else if (conflict.entityType === "defect") {
+        const localDefect = conflict.localVersion as unknown as DefectItem;
+        await updateDefect(localDefect);
+      } else if (conflict.entityType === "trainingComment") {
+        const localComment = conflict.localVersion as unknown as TrainingComment;
+        await saveTrainingComment(localComment);
+      }
+    }
+
+    setConflicts(prev => prev.filter(c => 
+      !(c.entityType === conflict.entityType && c.entityId === conflict.entityId)
+    ));
+    setSelectedConflict(null);
+    if (conflicts.length <= 1) {
+      setShowConflictModal(false);
+    }
+  };
+
+  const dismissConflict = (conflict: ConflictInfo) => {
+    setConflicts(prev => prev.filter(c => 
+      !(c.entityType === conflict.entityType && c.entityId === conflict.entityId)
+    ));
+    setSelectedConflict(null);
+    if (conflicts.length <= 1) {
+      setShowConflictModal(false);
     }
   };
 
@@ -4780,6 +4952,109 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {showConflictModal && selectedConflict && (
+        <div className="modal-overlay" onClick={() => dismissConflict(selectedConflict)}>
+          <div className="conflict-modal-content" onClick={e => e.stopPropagation()}>
+            <div className="conflict-modal-header">
+              <div className="conflict-modal-title">
+                <span className="conflict-icon">⚠️</span>
+                <h2>数据冲突提示</h2>
+              </div>
+              <button className="close-btn" onClick={() => dismissConflict(selectedConflict)}>×</button>
+            </div>
+            
+            <div className="conflict-modal-body">
+              <div className="conflict-info-bar">
+                <span className="conflict-entity-type">
+                  {getEntityTypeLabel(selectedConflict.entityType)}
+                </span>
+                <span className="conflict-entity-id">
+                  ID: {selectedConflict.entityId}
+                </span>
+              </div>
+              
+              <p className="conflict-description">
+                该{getEntityTypeLabel(selectedConflict.entityType)}在其他标签页被修改，请选择如何处理：
+              </p>
+              
+              <div className="conflict-changes-container">
+                <div className="conflict-changes-column">
+                  <h3>🔵 本地版本（当前标签页）</h3>
+                  <p className="conflict-version-time">
+                    更新时间: {new Date(selectedConflict.localVersion._updatedAt).toLocaleString("zh-CN")}
+                  </p>
+                  <div className="conflict-changes-list">
+                    {Object.entries(selectedConflict.localChanges).map(([field, diff]) => (
+                      <div key={field} className="conflict-change-item">
+                        <span className="conflict-field">{field}</span>
+                        <span className="conflict-value-local">
+                          {JSON.stringify(diff.old)} → {JSON.stringify(diff.new)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="conflict-changes-divider">
+                  <span className="conflict-divider-text">VS</span>
+                </div>
+                
+                <div className="conflict-changes-column">
+                  <h3>🟠 较新版本（其他标签页）</h3>
+                  <p className="conflict-version-time">
+                    更新时间: {new Date(selectedConflict.remoteVersion._updatedAt).toLocaleString("zh-CN")}
+                  </p>
+                  <div className="conflict-changes-list">
+                    {Object.entries(selectedConflict.remoteChanges).map(([field, diff]) => (
+                      <div key={field} className="conflict-change-item">
+                        <span className="conflict-field">{field}</span>
+                        <span className="conflict-value-remote">
+                          {JSON.stringify(diff.old)} → {JSON.stringify(diff.new)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              
+              {conflicts.length > 1 && (
+                <div className="conflict-pending-count">
+                  还有 <strong>{conflicts.length - 1}</strong> 个冲突待处理
+                </div>
+              )}
+            </div>
+            
+            <div className="conflict-modal-footer">
+              <button
+                className="secondary-action"
+                onClick={() => dismissConflict(selectedConflict)}
+              >
+                稍后处理
+              </button>
+              <button
+                className="conflict-btn-keep-local"
+                onClick={() => resolveConflict(selectedConflict, "keepLocal")}
+              >
+                🔵 保留本地版本
+              </button>
+              <button
+                className="primary-action conflict-btn-accept-remote"
+                onClick={() => resolveConflict(selectedConflict, "acceptRemote")}
+              >
+                🟠 接受较新版本
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dataRefreshIndicator && (
+        <div className="data-refresh-indicator">
+          <span className="refresh-spinner"></span>
+          <span>数据同步中...</span>
         </div>
       )}
     </main>

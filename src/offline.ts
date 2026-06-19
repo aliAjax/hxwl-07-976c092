@@ -1,3 +1,8 @@
+import {
+  isOperationProcessed,
+  markOperationProcessed
+} from "./sync";
+
 export type NetworkStatus = "online" | "offline";
 
 export type SyncStatus = "idle" | "syncing" | "synced" | "error";
@@ -211,8 +216,48 @@ function broadcastOnlineStatus(online: boolean): void {
 }
 
 export function enqueueOperation(type: OperationType, payload: any): SyncOperation {
+  const payloadOpId = payload?._operationId;
+  if (payloadOpId && isOperationProcessed(payloadOpId)) {
+    return {
+      id: payloadOpId,
+      type,
+      payload,
+      createdAt: Date.now(),
+      synced: true
+    };
+  }
+  
+  if (payloadOpId) {
+    const existingOp = syncQueue.find(op => 
+      op.payload?._operationId === payloadOpId && !op.synced
+    );
+    if (existingOp) {
+      return existingOp;
+    }
+  }
+  
+  const dedupCheck = `${type}-${JSON.stringify(payload)}`;
+  const dedupHash = btoa(dedupCheck);
+  if (isOperationProcessed(dedupHash)) {
+    return {
+      id: dedupHash,
+      type,
+      payload,
+      createdAt: Date.now(),
+      synced: true
+    };
+  }
+  
+  const existingDuplicate = syncQueue.find(op => {
+    if (op.synced || op.type !== type) return false;
+    return JSON.stringify(op.payload) === JSON.stringify(payload);
+  });
+  if (existingDuplicate) {
+    return existingDuplicate;
+  }
+
   const operation: SyncOperation = {
-    id: `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: payloadOpId || `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     type,
     payload,
     createdAt: Date.now(),
@@ -227,6 +272,8 @@ export function enqueueOperation(type: OperationType, payload: any): SyncOperati
     notifySyncQueue();
     registerBackgroundSync();
   }
+  
+  markOperationProcessed(dedupHash);
 
   return operation;
 }
