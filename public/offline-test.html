@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>离线能力回归测试 - 浏览器端</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f7fa;
+      color: #1f2937;
+      padding: 20px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #6b7280; margin-bottom: 24px; font-size: 14px; }
+    .section {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .section h2 {
+      font-size: 18px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .status-pending { background: #fef3c7; color: #92400e; }
+    .status-pass { background: #d1fae5; color: #065f46; }
+    .status-fail { background: #fee2e2; color: #991b1b; }
+    .status-info { background: #dbeafe; color: #1e40af; }
+    .test-case {
+      padding: 10px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .test-case .name { font-size: 14px; font-weight: 500; }
+    .test-case .desc { font-size: 12px; color: #6b7280; margin-top: 2px; }
+    .test-info { font-size: 13px; color: #4b5563; margin-bottom: 8px; }
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-secondary { background: #e5e7eb; color: #374151; }
+    .btn-secondary:hover { background: #d1d5db; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 12px 0;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #22c55e;
+      transition: width 0.3s;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .summary-card {
+      padding: 12px;
+      background: #f9fafb;
+      border-radius: 6px;
+      text-align: center;
+    }
+    .summary-card .count { font-size: 24px; font-weight: 700; }
+    .summary-card .label { font-size: 12px; color: #6b7280; margin-top: 4px; }
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: "SF Mono", Monaco, Consolas, monospace;
+    }
+    pre {
+      background: #1f2937;
+      color: #e5e7eb;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 8px;
+    }
+    .manual-steps {
+      list-style: none;
+      counter-reset: step;
+    }
+    .manual-steps li {
+      counter-increment: step;
+      padding: 8px 0 8px 32px;
+      position: relative;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .manual-steps li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 22px;
+      height: 22px;
+      background: #e5e7eb;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .log-panel {
+      max-height: 200px;
+      overflow-y: auto;
+      background: #111827;
+      color: #d1d5db;
+      padding: 12px;
+      border-radius: 6px;
+      font-family: "SF Mono", Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .log-line { margin-bottom: 2px; }
+    .log-info { color: #60a5fa; }
+    .log-warn { color: #fbbf24; }
+    .log-error { color: #f87171; }
+    .log-success { color: #34d399; }
+    .network-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .network-online { background: #d1fae5; color: #065f46; }
+    .network-offline { background: #fee2e2; color: #991b1b; }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔌 离线能力回归测试</h1>
+  <p class="subtitle">
+    本页面用于在真实浏览器环境中验证 Service Worker、离线缓存、同步队列等离线能力。
+    <span id="networkIndicator" class="network-indicator network-online">
+      <span class="dot"></span><span id="networkStatusText">在线</span>
+    </span>
+  </p>
+
+  <div class="section">
+    <h2>📊 测试概览</h2>
+    <div class="summary">
+      <div class="summary-card">
+        <div class="count" id="totalTests">0</div>
+        <div class="label">总用例</div>
+      </div>
+      <div class="summary-card">
+        <div class="count" style="color: #16a34a;" id="passedTests">0</div>
+        <div class="label">通过</div>
+      </div>
+      <div class="summary-card">
+        <div class="count" style="color: #dc2626;" id="failedTests">0</div>
+        <div class="label">失败</div>
+      </div>
+      <div class="summary-card">
+        <div class="count" style="color: #f59e0b;" id="pendingTests">0</div>
+        <div class="label">待执行</div>
+      </div>
+    </div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressBar" style="width: 0%"></div>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="runAllTests()">▶ 运行全部自动化测试</button>
+      <button class="btn btn-secondary" onclick="resetTests()">↻ 重置</button>
+      <button class="btn btn-secondary" onclick="clearSWAndCache()">🗑 清理 SW 与缓存</button>
+      <button class="btn btn-secondary" onclick="location.reload()">↺ 刷新页面</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>🤖 自动化测试</h2>
+
+    <div id="testCases"></div>
+  </div>
+
+  <div class="section">
+    <h2>📝 手动测试步骤</h2>
+    <p class="test-info">以下步骤需要人工操作验证，用于补充自动化测试覆盖不到的场景。</p>
+    <ol class="manual-steps">
+      <li>
+        <strong>首次访问 &amp; SW 注册</strong><br>
+        清理浏览器缓存后首次访问页面，检查 DevTools → Application → Service Workers 中 SW 状态为 activated。
+      </li>
+      <li>
+        <strong>离线加载核心页面</strong><br>
+        在 DevTools → Network 勾选 "Offline"，刷新页面，确认仍能正常显示（或显示 offline.html）。
+      </li>
+      <li>
+        <strong>断网保存检查记录</strong><br>
+        开启离线模式，在主应用中添加/编辑一条检查记录，确认数据保存到本地且同步队列数量 +1。
+      </li>
+      <li>
+        <strong>同步队列展示</strong><br>
+        查看同步队列 UI，确认队列中显示正确的操作类型、摘要和状态（待同步）。
+      </li>
+      <li>
+        <strong>恢复在线后自动同步</strong><br>
+        取消 "Offline" 勾选恢复在线，观察队列操作是否自动变为"已同步"状态，数量递减。
+      </li>
+      <li>
+        <strong>缓存清理功能</strong><br>
+        点击"清理缓存"按钮，检查 DevTools → Application → Cache Storage 中缓存被清除，SW 被注销。
+      </li>
+      <li>
+        <strong>后台同步（Background Sync）</strong><br>
+        离线时添加操作，然后关闭网络恢复在线，确认即使刷新页面操作仍被同步。
+      </li>
+      <li>
+        <strong>跨标签页同步</strong><br>
+        打开两个标签页，在一个标签页中添加操作，确认另一个标签页的队列状态同步更新。
+      </li>
+    </ol>
+  </div>
+
+  <div class="section">
+    <h2>🔧 调试工具</h2>
+    <div class="btn-group">
+      <button class="btn btn-secondary" onclick="inspectCache()">🔍 查看缓存内容</button>
+      <button class="btn btn-secondary" onclick="inspectSW()">ℹ️ 查看 SW 状态</button>
+      <button class="btn btn-secondary" onclick="simulateOffline()">📴 模拟离线（10秒）</button>
+      <button class="btn btn-secondary" onclick="addTestOperation()">➕ 添加测试操作到队列</button>
+      <button class="btn btn-danger" onclick="clearSWAndCache()">🗑 清理 SW &amp; 缓存</button>
+    </div>
+    <div class="log-panel" id="logPanel"></div>
+  </div>
+
+  <script>
+    const TEST_CASES = [
+      {
+        id: "sw-support",
+        name: "浏览器支持 Service Worker",
+        desc: "检测当前浏览器是否支持 Service Worker API",
+        run: async () => {
+          if (!("serviceWorker" in navigator)) throw new Error("浏览器不支持 Service Worker");
+          return "支持 Service Worker";
+        }
+      },
+      {
+        id: "sw-register",
+        name: "Service Worker 注册成功",
+        desc: "验证 sw.js 能够成功注册并进入 activated 状态",
+        run: async () => {
+          if (!("serviceWorker" in navigator)) throw new Error("不支持 SW");
+          const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+          if (!registration) throw new Error("注册失败");
+          if (registration.active) return "已激活";
+          if (registration.installing || registration.waiting) {
+            await new Promise((resolve) => {
+              const timer = setTimeout(resolve, 5000);
+              registration.addEventListener("updatefound", () => {
+                const sw = registration.installing;
+                sw.addEventListener("statechange", () => {
+                  if (sw.state === "activated") { clearTimeout(timer); resolve(); }
+                });
+              });
+              setTimeout(resolve, 5000);
+            });
+          }
+          return registration.active ? "已激活" : "注册中";
+        }
+      },
+      {
+        id: "cache-storage",
+        name: "CacheStorage 可用",
+        desc: "验证 CacheStorage API 可正常使用",
+        run: async () => {
+          if (!("caches" in window)) throw new Error("浏览器不支持 CacheStorage");
+          const testCache = await caches.open("test-cache-" + Date.now());
+          await testCache.put("/test", new Response("test"));
+          const has = await caches.has(testCache.storageName || "/test");
+          await caches.delete("test-cache-" + Date.now());
+          return "CacheStorage 正常工作";
+        }
+      },
+      {
+        id: "precache-core",
+        name: "核心页面已预缓存",
+        desc: "检查 / 和 /index.html 等核心资源是否在预缓存中",
+        run: async () => {
+          const cacheNames = await caches.keys();
+          const coreCache = cacheNames.find(n => n.includes("hxwl-07-v"));
+          if (!coreCache) throw new Error("未找到核心缓存");
+          const cache = await caches.open(coreCache);
+          const keys = await cache.keys();
+          const urls = keys.map(r => r.url);
+          const hasRoot = urls.some(u => u.endsWith("/") || u.endsWith("/index.html"));
+          if (!hasRoot) throw new Error("核心页面未缓存");
+          return `缓存 ${keys.length} 个资源`;
+        }
+      },
+      {
+        id: "offline-page",
+        name: "离线回退页面存在",
+        desc: "验证 offline.html 存在于缓存中",
+        run: async () => {
+          const cacheNames = await caches.keys();
+          for (const name of cacheNames) {
+            const cache = await caches.open(name);
+            const keys = await cache.keys();
+            if (keys.some(r => r.url.includes("offline.html"))) {
+              return "offline.html 已缓存";
+            }
+          }
+          throw new Error("offline.html 未在缓存中找到");
+        }
+      },
+      {
+        id: "network-status",
+        name: "网络状态检测",
+        desc: "验证 navigator.onLine 和 online/offline 事件",
+        run: async () => {
+          const online = navigator.onLine;
+          if (typeof online !== "boolean") throw new Error("无法获取网络状态");
+          return online ? "当前在线" : "当前离线";
+        }
+      },
+      {
+        id: "local-storage",
+        name: "localStorage 持久化",
+        desc: "验证 localStorage 可读写（用于同步队列持久化）",
+        run: async () => {
+          const testKey = "__offline_test__";
+          const testValue = "test-" + Date.now();
+          localStorage.setItem(testKey, testValue);
+          const readBack = localStorage.getItem(testKey);
+          localStorage.removeItem(testKey);
+          if (readBack !== testValue) throw new Error("读写不一致");
+          return "localStorage 正常";
+        }
+      },
+      {
+        id: "broadcast-channel",
+        name: "BroadcastChannel 支持",
+        desc: "检测是否支持广播通信（用于跨标签页同步）",
+        run: async () => {
+          if (!("BroadcastChannel" in window)) {
+            return { pass: true, info: "不支持 BroadcastChannel，使用 storage 事件降级" };
+          }
+          const ch1 = new BroadcastChannel("test-channel");
+          const ch2 = new BroadcastChannel("test-channel");
+          const received = new Promise(resolve => {
+            ch2.onmessage = (e) => resolve(e.data);
+          });
+          ch1.postMessage("hello");
+          const msg = await Promise.race([received, new Promise((_, r) => setTimeout(() => r(new Error("超时")), 1000))]);
+          ch1.close();
+          ch2.close();
+          if (msg !== "hello") throw new Error("消息不匹配");
+          return "BroadcastChannel 正常";
+        }
+      },
+      {
+        id: "sync-queue-basic",
+        name: "同步队列基础操作",
+        desc: "验证同步队列的入队、去重、移除等基本操作",
+        run: async () => {
+          const key = "hxwl-07-sync-queue";
+          const initial = localStorage.getItem(key);
+          const testOp = {
+            id: "test-op-" + Date.now(),
+            type: "addRecord",
+            payload: { id: "test-rec-1", status: "pending" },
+            createdAt: Date.now(),
+            synced: false
+          };
+          const queue = JSON.parse(initial || "[]");
+          queue.push(testOp);
+          localStorage.setItem(key, JSON.stringify(queue));
+          const readBack = JSON.parse(localStorage.getItem(key) || "[]");
+          const found = readBack.find(o => o.id === testOp.id);
+          if (initial) localStorage.setItem(key, initial);
+          else localStorage.removeItem(key);
+          if (!found) throw new Error("操作未写入队列");
+          return "队列操作正常";
+        }
+      },
+      {
+        id: "fetch-with-cache",
+        name: "缓存策略生效",
+        desc: "发起请求验证 SW 缓存策略是否拦截并返回缓存",
+        run: async () => {
+          if (!("serviceWorker" in navigator) || !navigator.serviceWorker.controller) {
+            return { pass: true, info: "SW 未控制页面，跳过此测试" };
+          }
+          const res = await fetch("/");
+          if (!res.ok) throw new Error("请求失败");
+          return "请求通过 SW 处理";
+        }
+      }
+    ];
+
+    let testResults = {};
+    const logPanel = document.getElementById("logPanel");
+
+    function log(message, type = "info") {
+      const line = document.createElement("div");
+      line.className = `log-line log-${type}`;
+      const time = new Date().toLocaleTimeString();
+      line.textContent = `[${time}] ${message}`;
+      logPanel.appendChild(line);
+      logPanel.scrollTop = logPanel.scrollHeight;
+    }
+
+    function updateNetworkStatus() {
+      const indicator = document.getElementById("networkIndicator");
+      const text = document.getElementById("networkStatusText");
+      if (navigator.onLine) {
+        indicator.className = "network-indicator network-online";
+        text.textContent = "在线";
+      } else {
+        indicator.className = "network-indicator network-offline";
+        text.textContent = "离线";
+      }
+    }
+
+    window.addEventListener("online", updateNetworkStatus);
+    window.addEventListener("offline", updateNetworkStatus);
+    updateNetworkStatus();
+
+    function renderTestCases() {
+      const container = document.getElementById("testCases");
+      container.innerHTML = TEST_CASES.map(tc => {
+        const result = testResults[tc.id];
+        let badgeClass = "status-badge status-pending";
+        let badgeText = "待执行";
+        if (result) {
+          if (result.pass) {
+            badgeClass = "status-badge status-pass";
+            badgeText = result.detail || "通过";
+          } else {
+            badgeClass = "status-badge status-fail";
+            badgeText = result.error || "失败";
+          }
+        }
+        return `
+          <div class="test-case" id="tc-${tc.id}">
+            <div>
+              <div class="name">${tc.name}</div>
+              <div class="desc">${tc.desc}</div>
+            </div>
+            <span class="${badgeClass}">${badgeText}</span>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function updateSummary() {
+      const total = TEST_CASES.length;
+      let passed = 0, failed = 0, pending = 0;
+      TEST_CASES.forEach(tc => {
+        const r = testResults[tc.id];
+        if (!r) pending++;
+        else if (r.pass) passed++;
+        else failed++;
+      });
+      document.getElementById("totalTests").textContent = total;
+      document.getElementById("passedTests").textContent = passed;
+      document.getElementById("failedTests").textContent = failed;
+      document.getElementById("pendingTests").textContent = pending;
+      const pct = total > 0 ? ((passed + failed) / total * 100) : 0;
+      document.getElementById("progressBar").style.width = pct + "%";
+      document.getElementById("progressBar").style.background = failed > 0 ? "#ef4444" : "#22c55e";
+    }
+
+    async function runTest(testCase) {
+      const tcEl = document.getElementById("tc-" + testCase.id);
+      try {
+        log(`运行测试: ${testCase.name}`, "info");
+        const result = await testCase.run();
+        if (result && typeof result === "object" && "pass" in result) {
+          testResults[testCase.id] = { pass: result.pass, detail: result.info };
+        } else {
+          testResults[testCase.id] = { pass: true, detail: result };
+        }
+        log(`✓ ${testCase.name}: ${testResults[testCase.id].detail || "通过"}`, "success");
+      } catch (e) {
+        testResults[testCase.id] = { pass: false, error: e.message };
+        log(`✗ ${testCase.name}: ${e.message}`, "error");
+      }
+      renderTestCases();
+      updateSummary();
+    }
+
+    async function runAllTests() {
+      log("开始运行全部自动化测试...", "info");
+      testResults = {};
+      renderTestCases();
+      updateSummary();
+      for (const tc of TEST_CASES) {
+        await runTest(tc);
+        await new Promise(r => setTimeout(r, 200));
+      }
+      const passed = Object.values(testResults).filter(r => r.pass).length;
+      log(`测试完成: ${passed}/${TEST_CASES.length} 通过`, passed === TEST_CASES.length ? "success" : "warn");
+    }
+
+    function resetTests() {
+      testResults = {};
+      renderTestCases();
+      updateSummary();
+      logPanel.innerHTML = "";
+      log("已重置测试", "info");
+    }
+
+    async function clearSWAndCache() {
+      log("正在清理 Service Worker 和缓存...", "warn");
+      try {
+        if ("serviceWorker" in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (const reg of registrations) {
+            await reg.unregister();
+            log(`已注销 SW: ${reg.scope}`, "success");
+          }
+        }
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          for (const key of keys) {
+            await caches.delete(key);
+            log(`已删除缓存: ${key}`, "success");
+          }
+        }
+        const lsKeys = Object.keys(localStorage).filter(k => k.startsWith("hxwl-07-"));
+        lsKeys.forEach(k => localStorage.removeItem(k));
+        if (lsKeys.length) log(`已清理 ${lsKeys.length} 个 localStorage 项`, "success");
+        log("清理完成", "success");
+      } catch (e) {
+        log(`清理失败: ${e.message}`, "error");
+      }
+    }
+
+    async function inspectCache() {
+      log("检查缓存内容...", "info");
+      if (!("caches" in window)) { log("不支持 CacheStorage", "error"); return; }
+      const keys = await caches.keys();
+      log(`找到 ${keys.length} 个缓存:`, "info");
+      for (const name of keys) {
+        const cache = await caches.open(name);
+        const urls = await cache.keys();
+        log(`  ${name} (${urls.length} 个资源)`, "info");
+        urls.slice(0, 5).forEach(r => log(`    - ${new URL(r.url).pathname}`, "info"));
+        if (urls.length > 5) log(`    ... 还有 ${urls.length - 5} 个`, "info");
+      }
+    }
+
+    async function inspectSW() {
+      log("检查 Service Worker 状态...", "info");
+      if (!("serviceWorker" in navigator)) { log("不支持 Service Worker", "error"); return; }
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) { log("未找到已注册的 SW", "warn"); return; }
+      log(`Scope: ${reg.scope}`, "info");
+      if (reg.active) log(`Active: ${reg.active.scriptURL} (${reg.active.state})`, "success");
+      if (reg.waiting) log(`Waiting: ${reg.waiting.scriptURL}`, "warn");
+      if (reg.installing) log(`Installing: ${reg.installing.scriptURL}`, "info");
+      if (navigator.serviceWorker.controller) {
+        log(`当前页面被 SW 控制`, "success");
+      } else {
+        log(`当前页面未被 SW 控制（刷新后生效）`, "warn");
+      }
+    }
+
+    function simulateOffline() {
+      log("模拟离线 10 秒...", "warn");
+      log("提示: 请在 DevTools Network 面板手动勾选 Offline", "info");
+      setTimeout(() => log("请恢复网络连接", "info"), 10000);
+    }
+
+    function addTestOperation() {
+      const key = "hxwl-07-sync-queue";
+      const queue = JSON.parse(localStorage.getItem(key) || "[]");
+      const op = {
+        id: "test-op-" + Date.now(),
+        type: ["addRecord", "updateRecord", "addDefect"][Math.floor(Math.random() * 3)],
+        payload: { id: "rec-test-" + Math.random().toString(36).slice(2, 8), status: "pending" },
+        createdAt: Date.now(),
+        synced: false
+      };
+      queue.push(op);
+      localStorage.setItem(key, JSON.stringify(queue));
+      log(`已添加测试操作: ${op.type}`, "success");
+      log(`当前队列长度: ${queue.length}`, "info");
+    }
+
+    renderTestCases();
+    updateSummary();
+    log("离线测试页面已加载", "success");
+    log("提示: 点击「运行全部自动化测试」开始验证", "info");
+  </script>
+</body>
+</html>

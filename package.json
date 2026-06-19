@@ -4,7 +4,12 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5107",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:offline": "vitest run tests/offline/",
+    "test:offline:watch": "vitest tests/offline/",
+    "test:offline:ui": "vitest --ui tests/offline/",
+    "test:ci": "vitest run --reporter=junit --outputFile=test-results.xml",
+    "offline:check": "node scripts/offline-check.js"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",
@@ -17,6 +22,7 @@
     "@types/node": "^25.9.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "jsdom": "^29.1.1",
     "vitest": "^4.1.9"
   }
 }

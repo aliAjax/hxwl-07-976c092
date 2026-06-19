@@ -1,0 +1,115 @@
+name: Offline Regression Tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "src/offline.ts"
+      - "src/sync.ts"
+      - "public/sw.js"
+      - "tests/offline/**"
+      - "package.json"
+      - ".github/workflows/offline-tests.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "src/offline.ts"
+      - "src/sync.ts"
+      - "public/sw.js"
+      - "tests/offline/**"
+      - "package.json"
+      - ".github/workflows/offline-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  offline-tests:
+    name: Offline Capability Regression Tests
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run offline unit tests
+        run: npm run test:offline
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Run CI test with JUnit report
+        if: matrix.node-version == '20.x'
+        run: npm run test:ci
+
+      - name: Upload test results
+        if: matrix.node-version == '20.x' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+
+  build-check:
+    name: Build & Service Worker Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Verify Service Worker exists in build output
+        run: |
+          if [ ! -f "dist/sw.js" ]; then
+            echo "ERROR: Service Worker file not found in dist/"
+            exit 1
+          fi
+          echo "Service Worker found."
+          wc -l dist/sw.js
+
+      - name: Verify offline.html exists
+        run: |
+          if [ ! -f "dist/offline.html" ]; then
+            echo "WARNING: offline.html not found in dist/"
+          else
+            echo "offline.html found."
+          fi
+
+      - name: Validate Service Worker cache configuration
+        run: |
+          echo "Checking CACHE_VERSION..."
+          grep -q "CACHE_VERSION" dist/sw.js && echo "OK: CACHE_VERSION defined" || echo "WARN: CACHE_VERSION not found"
+          echo "Checking PRECACHE_URLS..."
+          grep -q "PRECACHE_URLS\|precacheUrls\|preCache" dist/sw.js && echo "OK: Precache list found" || echo "WARN: Precache list not found"
+          echo "Checking fetch handler..."
+          grep -q "addEventListener.*fetch\|onfetch" dist/sw.js && echo "OK: Fetch handler found" || echo "WARN: Fetch handler not found"
+          echo "Checking sync handler..."
+          grep -q "addEventListener.*sync\|onsync" dist/sw.js && echo "OK: Background sync handler found" || echo "WARN: Background sync handler not found"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: dist/
